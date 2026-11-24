@@ -65,7 +65,7 @@
     .ctx-menu .kbd { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; color: #8ea0be; }
     .ctx-menu .danger { color: #fca5a5; }
     .ctx-sep { height: 1px; background: #223250; margin: 4px 0; }
-    .data-grid td.ptr-cell { box-shadow: inset 0 0 0 1px rgba(62,207,190,.4); }
+    .data-grid td.ptr-cell, .data-grid td.fx-cell { box-shadow: inset 0 0 0 1px rgba(62,207,190,.4); }
     .ptr-chip { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; color: #3ecfbe; background: rgba(62,207,190,.12); border-radius: 3px; padding: 0 4px; line-height: 14px; flex-shrink: 0; margin-top: 2px; }
     .addr-box { min-width: 56px; height: 26px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; }
     .data-grid td.locked { color: #8ea0be; }
@@ -519,7 +519,7 @@
                     </td>
                     <td v-for="col in visibleColumns" :key="col.id"
                       class="px-0 align-top"
-                      :class="[isComputedCell(rec, col) && 'locked', cellChange(rec, col) && 'changed', cellPtr(rec, col) && 'ptr-cell', isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
+                      :class="[isComputedCell(rec, col) && 'locked', cellChange(rec, col) && 'changed', (cellPtr(rec, col) || cellFx(rec, col)) && (cellFx(rec, col) ? 'fx-cell' : 'ptr-cell'), isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
                       @mousedown.stop="onCellMouseDown($event, rec, col)"
                       @mouseenter="onCellMouseEnter(rec, col)"
                       @contextmenu.prevent="openCtxMenu($event, 'cell', rec, col)">
@@ -536,7 +536,8 @@
                             <cell-view :text="displayValue(rec, col)" :column="col" :raw="rawValue(rec, col)" />
                           </div>
                         </div>
-                        <span v-if="cellPtr(rec, col)" class="ptr-chip" :title="'This cell shows ' + cellPtr(rec, col)">={{ cellPtr(rec, col) }}</span>
+                        <span v-if="cellFx(rec, col)" class="ptr-chip" :title="cellFx(rec, col)">fx</span>
+                        <span v-else-if="cellPtr(rec, col)" class="ptr-chip" :title="'This cell shows ' + cellPtr(rec, col)">={{ cellPtr(rec, col) }}</span>
                       </div>
                     </td>
                   </tr>
@@ -577,6 +578,7 @@
                       {{ displayValue(formRecord, col) || '—' }}
                     </div>
                     <p v-if="isComputedCell(formRecord, col) && isKeyLink(col)" class="text-[11px] text-gold">Filled by XLOOKUP from {{ keySourceLabel(col) }}.</p>
+                    <p v-else-if="isComputedCell(formRecord, col) && cellFx(formRecord, col)" class="text-[11px] text-gold">This cell looks up using the cell above (column rule off here only).</p>
                     <p v-else-if="isComputedCell(formRecord, col) && col.type==='lookup'" class="text-[11px] text-gold">Live field from the linked row.</p>
                     <template v-else-if="col.type==='attachment'">
                       <attach-cell :column="col" :record="formRecord" variant="form" :locked="!!formRecord.locked" @commit="onFormCommit" @open="openAttachment" />
@@ -820,7 +822,7 @@
             <span class="font-mono text-gold">{This[-1]}+1</span> increments it.
             Ranges: <span class="font-mono text-gold">SUM({Qty[-2:0]})</span> is Qty on this row and the two above.
             Dates are day/month/year: <span class="font-mono text-gold">01/01/2026+1</span> → <span class="font-mono text-gold">02/01/2026</span>.
-            One cell can follow another without changing the column: right-click the lower cell → Look at the cell above.
+            The formula is the column default. To make only the row below look up from this cell, right-click that cell → Look this up using the cell above (the column rule stays on every other row).
           </div>
           <textarea v-model="colEditor.draft.formula.expression" rows="3" class="w-full rounded-lg bg-ink-900 border border-line px-3 py-2 font-mono text-sm" placeholder="{This[-1]}+1"></textarea>
           <div class="flex flex-wrap gap-1">
@@ -1013,6 +1015,29 @@
         <div class="flex justify-end gap-2">
           <button class="px-3 py-1.5 text-sm" @click="resolveConfirm(false)">Cancel</button>
           <button class="px-3 py-1.5 text-sm rounded-lg font-semibold" :class="confirmDlg.danger ? 'bg-red-500 text-white' : 'bg-teal text-ink-900'" @click="resolveConfirm(true)">{{ confirmDlg.ok || 'Confirm' }}</button>
+        </div>
+      </modal-frame>
+
+      <modal-frame v-if="lookupFrom.open" title="Look this up using the cell above" @close="lookupFrom.open=false">
+        <p class="text-sm text-mute mb-3">Only this cell leaves the column rule. It searches with the value in <span class="font-mono text-gold">{{ lookupFrom.keyAddr }}</span> (the cell above). Other rows stay on the column rule.</p>
+        <label class="block text-sm mb-3">Sheet to search
+          <select v-model="lookupFrom.tableId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2" @change="onLookupFromTableChange">
+            <option v-for="tb in store.tables" :key="tb.id" :value="tb.id">{{ tb.name }}</option>
+          </select>
+        </label>
+        <label class="block text-sm mb-3">Match this column to the cell above
+          <select v-model="lookupFrom.matchColumnId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
+            <option v-for="c in lookupFromColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
+          </select>
+        </label>
+        <label class="block text-sm mb-4">Show this field
+          <select v-model="lookupFrom.fieldColumnId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
+            <option v-for="c in lookupFromColumns" :key="'r'+c.id" :value="c.id">{{ c.name }}</option>
+          </select>
+        </label>
+        <div class="flex justify-end gap-2">
+          <button class="px-3 py-1.5 text-sm" @click="lookupFrom.open=false">Cancel</button>
+          <button class="px-3 py-1.5 text-sm rounded-lg bg-teal text-ink-900 font-semibold" @click="saveLookupFromAbove">Look up</button>
         </div>
       </modal-frame>
 
@@ -1379,6 +1404,20 @@
     function cellPtrOf(rec, col) {
       if (!rec || !col || !rec.ptr) return '';
       return String(rec.ptr[col.id] || '').trim();
+    }
+    function cellFxOf(rec, col) {
+      if (!rec || !col || !rec.fx) return '';
+      return String(rec.fx[col.id] || '').trim();
+    }
+    function cellOwnOf(rec, col) {
+      return !!(rec && col && rec.own && rec.own[col.id]);
+    }
+    function columnLocksTypedValue(col) {
+      if (!col) return false;
+      if (col.type === 'rollup' || col.type === 'autonumber' || col.type === 'lookup') return true;
+      if (hasFormula(col) && !formulaUsesTypedValue(col)) return true;
+      if (isLinkCol(col) && col.link && col.link.mode === 'key' && col.link.keyColumnId) return true;
+      return false;
     }
     function resolveA1(store, table, addr, stack) {
       const p = parseA1(addr);
@@ -1901,6 +1940,19 @@
     function computeValue(store, table, rec, col, stack) {
       stack = stack || new Set();
       if (!col) return null;
+      if (cellOwnOf(rec, col)) return rawStored(rec, col);
+      const fx = cellFxOf(rec, col);
+      if (fx) {
+        const key = table.id + ':' + rec.id + ':' + col.id + ':fx';
+        if (stack.has(key)) return '#CYCLE!';
+        stack.add(key);
+        const ctx = {
+          resolve(name) { return resolveRef(store, table, rec, name, stack, col); },
+          store, table, rec, col, stack
+        };
+        const r = evaluateFormula(fx, ctx);
+        return r.ok ? r.value : r.value;
+      }
       const ptr = cellPtrOf(rec, col);
       if (ptr) {
         const key = table.id + ':' + rec.id + ':' + col.id + ':ptr';
@@ -1952,7 +2004,8 @@
 
     function valueOf(store, table, rec, col, stack) {
       if (!col) return null;
-      if (col.type === 'rollup' || col.type === 'lookup' || hasFormula(col) || cellPtrOf(rec, col)) return computeValue(store, table, rec, col, stack);
+      if (cellOwnOf(rec, col)) return asFormulaValue(rawStored(rec, col), col);
+      if (cellFxOf(rec, col) || col.type === 'rollup' || col.type === 'lookup' || hasFormula(col) || cellPtrOf(rec, col)) return computeValue(store, table, rec, col, stack);
       if (isLinkCol(col)) return resolveLinkRecordId(store, table, rec, col);
       return asFormulaValue(rawStored(rec, col), col);
     }
@@ -1991,6 +2044,9 @@
         col = selfCol;
       } else {
         col = colByName(table, rawName);
+        if (!col && parseA1(rawName) && parsed.offStart == null && !parsed.field) {
+          return resolveA1(store, table, rawName, stack);
+        }
         if (!col) throw new Error('Unknown column ' + name);
       }
       const typedSelf = isThis && parsed.offStart == null;
@@ -2048,7 +2104,8 @@
         if (agg === 'count') return String(v ?? 0);
         return formatNumber(v, { type: 'currency', decimals: 2 });
       }
-      if (hasFormula(col)) return formatFormulaResult(valueOf(store, table, rec, col), col);
+      if (cellFxOf(rec, col) && !cellOwnOf(rec, col)) return formatFormulaResult(valueOf(store, table, rec, col), col);
+      if (hasFormula(col) && !cellOwnOf(rec, col)) return formatFormulaResult(valueOf(store, table, rec, col), col);
       const v = valueOf(store, table, rec, col);
       if (col.type === 'checkbox') return v ? 'Yes' : 'No';
       if (isLinkCol(col)) {
@@ -2510,7 +2567,7 @@
           const el = this.$refs.input;
           if (el && typeof el.value === 'string') this.buffer = el.value;
           let v = this.buffer;
-          if (typeof v === 'string' && /^\s*=/.test(v) && parseA1(v)) {
+          if (typeof v === 'string' && /^\s*=/.test(v)) {
             this.emitCommit(v.trim());
             this.dirty = false;
             return;
@@ -2757,6 +2814,7 @@
           selectMode: 'cells',
           ctxMenu: { open: false, x: 0, y: 0, kind: 'cell' },
           pointPick: null,
+          lookupFrom: { open: false, recId: '', colId: '', tableId: '', matchColumnId: '', fieldColumnId: '', keyAddr: '' },
           formulaRel: { colName: 'This', offset: -1 },
           editing: { recId: null, colId: null },
           search: '',
@@ -2872,8 +2930,10 @@
             { id: 'fill', label: 'Fill down', disabled: cells.length < 2 },
             { sep: true },
             { id: 'above', label: 'Look at the cell above (this cell only)', disabled: cells.length !== 1 },
+            { id: 'lookupabove', label: 'Look this up using the cell above…', disabled: cells.length !== 1 },
             { id: 'point', label: 'Look at another cell…', disabled: cells.length !== 1 },
-            { id: 'unpoint', label: 'Type in this cell again', disabled: cells.length !== 1 || !this.cellPtr(cells[0].rec, cells[0].col) },
+            { id: 'own', label: 'Type in this cell (ignore column rule)', disabled: cells.length !== 1 },
+            { id: 'colrule', label: 'Use the column rule again', disabled: cells.length !== 1 || !this.hasCellOverride(cells[0].rec, cells[0].col) },
             { sep: true },
             { id: 'clear', label: 'Clear cells', kbd: 'Del', disabled: !hasSel },
             { id: 'insert', label: 'Insert row below', disabled: !this.canAddRows },
@@ -2969,6 +3029,10 @@
           const rt = link && findTable(this.store, link.link && link.link.tableId);
           return rt ? rt.columns : [];
         },
+        lookupFromColumns() {
+          const t = findTable(this.store, this.lookupFrom.tableId);
+          return t ? t.columns.filter((c) => !['rollup', 'formula'].includes(c.type)) : [];
+        },
         rollupLinkColumns() {
           const t = findTable(this.store, this.colEditor.draft.rollup && this.colEditor.draft.rollup.childTableId);
           return t ? t.columns.filter((c) => isLinkCol(c)) : [];
@@ -3058,6 +3122,10 @@
           return i < 0 ? '' : i + 1;
         },
         cellPtr(rec, col) { return cellPtrOf(rec, col); },
+        cellFx(rec, col) { return cellFxOf(rec, col); },
+        hasCellOverride(rec, col) {
+          return !!(cellOwnOf(rec, col) || cellFxOf(rec, col) || cellPtrOf(rec, col));
+        },
         lookAtCellAbove() {
           const t = this.currentTable;
           const rec = this.selectedRecord;
@@ -3067,6 +3135,82 @@
           if (i < 1) return this.toast('There is no row above this one.');
           const above = t.records[i - 1];
           this.setCellPtr(rec, col, a1Of(t, above, col));
+        },
+        cellAboveAddr() {
+          const t = this.currentTable;
+          const rec = this.selectedRecord;
+          const col = t && findColumn(t, this.selectedCell && this.selectedCell.colId);
+          if (!t || !rec || !col) return '';
+          const i = t.records.findIndex((r) => r.id === rec.id);
+          if (i < 1) return '';
+          return a1Of(t, t.records[i - 1], col);
+        },
+        openLookupFromAbove() {
+          const t = this.currentTable;
+          const rec = this.selectedRecord;
+          const col = t && findColumn(t, this.selectedCell && this.selectedCell.colId);
+          if (!t || !rec || !col) return this.toast('Click the cell that should look up, then try again.', 'warn');
+          const addr = this.cellAboveAddr();
+          if (!addr) return this.toast('There is no row above this one.');
+          const pick = this.store.tables.find((x) => x.name === 'Products') || this.store.tables.find((x) => x.id !== t.id) || t;
+          const cols = pick.columns || [];
+          this.lookupFrom = {
+            open: true,
+            recId: rec.id,
+            colId: col.id,
+            tableId: pick.id,
+            matchColumnId: cols[0] ? cols[0].id : '',
+            fieldColumnId: (cols[1] || cols[0] || {}).id || '',
+            keyAddr: addr
+          };
+        },
+        onLookupFromTableChange() {
+          const cols = this.lookupFromColumns;
+          this.lookupFrom.matchColumnId = cols[0] ? cols[0].id : '';
+          this.lookupFrom.fieldColumnId = (cols[1] || cols[0] || {}).id || '';
+        },
+        saveLookupFromAbove() {
+          const t = this.currentTable;
+          const rec = t && t.records.find((r) => r.id === this.lookupFrom.recId);
+          const col = t && findColumn(t, this.lookupFrom.colId);
+          const src = findTable(this.store, this.lookupFrom.tableId);
+          const match = src && findColumn(src, this.lookupFrom.matchColumnId);
+          const field = src && findColumn(src, this.lookupFrom.fieldColumnId);
+          if (!rec || !col || !src || !match || !field) return this.toast('Pick a sheet and two columns.', 'warn');
+          const q = (s) => String(s).replace(/"/g, '');
+          const expr = 'XLOOKUP(' + this.lookupFrom.keyAddr + ', "' + q(src.name) + '", "' + q(match.name) + '", "' + q(field.name) + '")';
+          this.setCellFx(rec, col, expr);
+          this.lookupFrom.open = false;
+        },
+        setCellFx(rec, col, expr) {
+          if (rec.locked) return this.toast('This row is locked.');
+          const e = String(expr || '').replace(/^=+/, '').trim();
+          if (!e) return;
+          if (rec.ptr) delete rec.ptr[col.id];
+          if (rec.own) delete rec.own[col.id];
+          if (!rec.fx) rec.fx = {};
+          rec.fx[col.id] = e;
+          rec.updatedAt = nowIso();
+          this.toast('This cell looks up using the cell above. The column rule is off here only.');
+        },
+        setCellOwn(rec, col) {
+          if (!rec || !col) return;
+          if (rec.locked) return this.toast('This row is locked.');
+          if (rec.ptr) delete rec.ptr[col.id];
+          if (rec.fx) delete rec.fx[col.id];
+          if (!rec.own) rec.own = {};
+          rec.own[col.id] = true;
+          rec.updatedAt = nowIso();
+          this.toast('This cell is typed. The column rule is off here only.');
+          this.beginEdit(rec, col);
+        },
+        useColumnRule(rec, col) {
+          if (!rec || !col) return;
+          if (rec.ptr) delete rec.ptr[col.id];
+          if (rec.fx) delete rec.fx[col.id];
+          if (rec.own) delete rec.own[col.id];
+          rec.updatedAt = nowIso();
+          this.toast('This cell uses the column rule again.');
         },
         startPointPick() {
           const rec = this.selectedRecord;
@@ -3092,6 +3236,8 @@
           if (!p) { delete rec.ptr[col.id]; return; }
           if (!parseA1(p)) return this.toast('Use an address like B2 or Customers!B2.', 'warn');
           rec.ptr[col.id] = p.toUpperCase().replace(/!/, '!');
+          if (rec.fx) delete rec.fx[col.id];
+          if (rec.own) delete rec.own[col.id];
           rec.updatedAt = nowIso();
           this.toast('This cell follows ' + rec.ptr[col.id] + '. Other rows in this column stay as they are.');
         },
@@ -3129,6 +3275,9 @@
           return false;
         },
         isComputedCell(rec, col) {
+          if (!col) return false;
+          if (cellOwnOf(rec, col)) return false;
+          if (cellFxOf(rec, col) || cellPtrOf(rec, col)) return true;
           return this.isComputed(col);
         },
         typeShort(t) {
@@ -3141,6 +3290,8 @@
         cellTitle(rec, col) {
           const ch = this.cellChange(rec, col);
           if (ch) return 'Was ' + (ch.before || 'blank') + ' → ' + (ch.after || 'blank');
+          const fx = cellFxOf(rec, col);
+          if (fx) return fx;
           const ptr = cellPtrOf(rec, col);
           if (ptr) return 'Shows ' + ptr;
           if (hasFormula(col) && formulaUsesTypedValue(col)) {
@@ -3817,10 +3968,15 @@
           else if (id === 'duplicate') this.duplicateSelectedRows();
           else if (id === 'fill') this.fillDownSelection();
           else if (id === 'above') this.lookAtCellAbove();
+          else if (id === 'lookupabove') this.openLookupFromAbove();
           else if (id === 'point') this.startPointPick();
-          else if (id === 'unpoint') {
+          else if (id === 'own') {
             const c = this.selectedCellEntries()[0];
-            if (c) this.clearCellPtr(c.rec, c.col);
+            if (c) this.setCellOwn(c.rec, c.col);
+          }
+          else if (id === 'colrule') {
+            const c = this.selectedCellEntries()[0];
+            if (c) this.useColumnRule(c.rec, c.col);
           }
           else if (id === 'clear') this.clearSelectedCells();
           else if (id === 'insert') this.insertRowBelow();
@@ -3951,9 +4107,10 @@
           if (rec && rec.locked) return this.toast('This row is locked. Uncheck the lock to edit.');
           if (this.isComputedCell(rec, col)) {
             if (col.type === 'autonumber') this.toast('Autonumber is assigned when the row is created.');
-            else if (col.type === 'lookup') this.toast('This field is looked up from the linked row. Change the key or link to update it.');
+            else if (cellFxOf(rec, col)) this.toast('This cell looks up from another cell. Right-click to type here or use the column rule again.');
+            else if (col.type === 'lookup') this.toast('This field follows the column lookup. Right-click this cell to type here, or look this up using the cell above.');
             else if (this.isKeyLink(col)) this.toast('This link is filled by XLOOKUP. Type the key in ' + this.keySourceLabel(col) + '.');
-            else if (hasFormula(col)) this.toast('This cell uses the column formula.');
+            else if (hasFormula(col)) this.toast('This cell uses the column formula. Right-click to type here (this cell only) or look this up using the cell above.');
             else this.toast('This formula is calculated from other columns. Use {This} to apply a formula to the value typed in this cell.');
             return;
           }
@@ -3967,11 +4124,17 @@
         commitPayload(payload) {
           if (!payload) return;
           const v = payload.value;
-          if (typeof v === 'string' && /^\s*=/.test(v) && parseA1(v)) {
-            this.setCellPtr(payload.record, payload.column, v);
+          if (typeof v === 'string' && /^\s*=/.test(v)) {
+            const expr = v.replace(/^=+/, '').trim();
+            if (parseA1(expr) && !/[(),]/.test(expr)) {
+              this.setCellPtr(payload.record, payload.column, expr);
+              return;
+            }
+            this.setCellFx(payload.record, payload.column, expr);
             return;
           }
           if (payload.record && payload.record.ptr) delete payload.record.ptr[payload.column.id];
+          if (payload.record && payload.record.fx) delete payload.record.fx[payload.column.id];
           this.setCell(payload.record, payload.column, v);
         },
         setCell(rec, col, value, quiet) {
@@ -3990,6 +4153,11 @@
           }
           rec.data[col.id] = value;
           if (rec.ptr) delete rec.ptr[col.id];
+          if (rec.fx) delete rec.fx[col.id];
+          if (columnLocksTypedValue(col)) {
+            if (!rec.own) rec.own = {};
+            rec.own[col.id] = true;
+          }
           rec.updatedAt = nowIso();
           if (isLinkCol(col) && (!col.link || col.link.mode !== 'key')) this.applyAutofill(t, rec, col, value);
           this.applyKeyLookups(t, rec, col);
@@ -4785,6 +4953,22 @@
           cust.records[0].ptr[cityCol.id] = a1Of(cust, cust.records[0], nameCol);
           const shown = formatDisplay(ws, cust, cust.records[0], cityCol);
           if (shown !== 'Acme Industrial') console.warn('cell pointer failed', shown, a1Of(cust, cust.records[0], nameCol));
+          const lu = sampleWorkspace('Lu');
+          const items = lu.tables.find((t) => t.name === 'Line Items');
+          const tot = items.columns.find((c) => c.name === 'Line Total');
+          const itemNo = items.columns.find((c) => c.name === 'Item No');
+          const row0Tot = formatDisplay(lu, items, items.records[0], tot);
+          items.records[1].own = {};
+          items.records[1].own[tot.id] = true;
+          items.records[1].data[tot.id] = 99;
+          const typed = formatDisplay(lu, items, items.records[1], tot);
+          if (typed.indexOf('99') < 0) console.warn('cell own failed to skip column formula', typed, row0Tot);
+          if (formatDisplay(lu, items, items.records[0], tot) !== row0Tot) console.warn('column formula should still run on other rows');
+          delete items.records[1].own;
+          items.records[1].fx = {};
+          items.records[1].fx[tot.id] = 'XLOOKUP(' + a1Of(items, items.records[0], itemNo) + ', "Products", "Item No", "Name")';
+          const looked = formatDisplay(lu, items, items.records[1], tot);
+          if (looked !== 'Widget A') console.warn('cell lookup from A1 failed', looked, items.records[1].fx[tot.id]);
         },
         onPaste(e) {
           const target = e.target;
