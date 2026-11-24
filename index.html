@@ -820,7 +820,7 @@
             <span class="font-mono text-gold">{This[-1]}+1</span> increments it.
             Ranges: <span class="font-mono text-gold">SUM({Qty[-2:0]})</span> is Qty on this row and the two above.
             Dates are day/month/year: <span class="font-mono text-gold">01/01/2026+1</span> → <span class="font-mono text-gold">02/01/2026</span>.
-            A single cell can also show another cell: right-click → This cell shows another cell, or type <span class="font-mono text-gold">=B2</span>.
+            One cell can follow another without changing the column: right-click the lower cell → Look at the cell above.
           </div>
           <textarea v-model="colEditor.draft.formula.expression" rows="3" class="w-full rounded-lg bg-ink-900 border border-line px-3 py-2 font-mono text-sm" placeholder="{This[-1]}+1"></textarea>
           <div class="flex flex-wrap gap-1">
@@ -2871,9 +2871,9 @@
             { sep: true },
             { id: 'fill', label: 'Fill down', disabled: cells.length < 2 },
             { sep: true },
-            { id: 'point', label: 'This cell shows another cell…', disabled: cells.length !== 1 },
-            { id: 'unpoint', label: 'Stop pointing', disabled: cells.length !== 1 || !this.cellPtr(cells[0].rec, cells[0].col) },
-            { id: 'filterhere', label: 'Only rows like this', disabled: cells.length !== 1 },
+            { id: 'above', label: 'Look at the cell above (this cell only)', disabled: cells.length !== 1 },
+            { id: 'point', label: 'Look at another cell…', disabled: cells.length !== 1 },
+            { id: 'unpoint', label: 'Type in this cell again', disabled: cells.length !== 1 || !this.cellPtr(cells[0].rec, cells[0].col) },
             { sep: true },
             { id: 'clear', label: 'Clear cells', kbd: 'Del', disabled: !hasSel },
             { id: 'insert', label: 'Insert row below', disabled: !this.canAddRows },
@@ -3058,6 +3058,16 @@
           return i < 0 ? '' : i + 1;
         },
         cellPtr(rec, col) { return cellPtrOf(rec, col); },
+        lookAtCellAbove() {
+          const t = this.currentTable;
+          const rec = this.selectedRecord;
+          const col = t && findColumn(t, this.selectedCell && this.selectedCell.colId);
+          if (!t || !rec || !col) return this.toast('Click the cell in the row under the date (or value) first.', 'warn');
+          const i = t.records.findIndex((r) => r.id === rec.id);
+          if (i < 1) return this.toast('There is no row above this one.');
+          const above = t.records[i - 1];
+          this.setCellPtr(rec, col, a1Of(t, above, col));
+        },
         startPointPick() {
           const rec = this.selectedRecord;
           const col = this.currentTable && findColumn(this.currentTable, this.selectedCell.colId);
@@ -3083,7 +3093,7 @@
           if (!parseA1(p)) return this.toast('Use an address like B2 or Customers!B2.', 'warn');
           rec.ptr[col.id] = p.toUpperCase().replace(/!/, '!');
           rec.updatedAt = nowIso();
-          this.toast(col.name + ' now shows ' + rec.ptr[col.id] + '.');
+          this.toast('This cell follows ' + rec.ptr[col.id] + '. Other rows in this column stay as they are.');
         },
         clearCellPtr(rec, col) {
           if (rec && rec.ptr) delete rec.ptr[col.id];
@@ -3806,12 +3816,12 @@
           else if (id === 'paste') this.pasteFromClipboard();
           else if (id === 'duplicate') this.duplicateSelectedRows();
           else if (id === 'fill') this.fillDownSelection();
+          else if (id === 'above') this.lookAtCellAbove();
           else if (id === 'point') this.startPointPick();
           else if (id === 'unpoint') {
             const c = this.selectedCellEntries()[0];
             if (c) this.clearCellPtr(c.rec, c.col);
           }
-          else if (id === 'filterhere') this.filterToThisCell();
           else if (id === 'clear') this.clearSelectedCells();
           else if (id === 'insert') this.insertRowBelow();
           else if (id === 'selrow') this.selectCurrentRows();
