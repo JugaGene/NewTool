@@ -418,8 +418,8 @@
                   <button class="px-2 py-1" :class="view==='form' ? 'bg-ink-700' : 'text-mute'" @click="view='form'">Form</button>
                 </div>
                 <div v-if="canAddRows" class="inline-flex rounded-md overflow-hidden border border-teal">
-                  <button class="text-[11px] px-2 py-1 bg-teal text-ink-900 font-semibold" title="New row uses the column rules" @click="addRecord(false)">+ Row</button>
-                  <button class="text-[11px] px-2 py-1 bg-ink-900 text-teal font-semibold border-l border-teal/50" title="New row does not follow column rules — you can set a different rule on each cell" @click="addRecord(true)">own rules</button>
+                  <button class="text-[11px] px-2 py-1 bg-teal text-ink-900 font-semibold" title="Add a row. Click any cell and type — a date, text, or =A1 like Excel. Column formulas fill empty cells only." @click="addRecord(false)">+ Row</button>
+                  <button class="text-[11px] px-2 py-1 bg-ink-900 text-teal font-semibold border-l border-teal/50" title="Add a row that starts with no column formulas" @click="addRecord(true)">own rules</button>
                 </div>
                 <button class="text-[11px] rounded-md px-2 py-1 border border-line hover:bg-ink-700" @click="copySelected" :disabled="!selectedCellEntries().length">Copy</button>
                 <button class="text-[11px] rounded-md px-2 py-1 border border-line hover:bg-ink-700" @click="pasteFromClipboard" :disabled="!visibleColumns.length">Paste</button>
@@ -524,7 +524,7 @@
                     </td>
                     <td v-for="col in visibleColumns" :key="col.id"
                       class="px-0 align-top"
-                      :class="[isComputedCell(rec, col) && 'locked', cellChange(rec, col) && 'changed', (cellPtr(rec, col) || cellFx(rec, col)) && (cellFx(rec, col) ? 'fx-cell' : 'ptr-cell'), isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
+                      :class="[cellHardLocked(rec, col) && 'locked', cellChange(rec, col) && 'changed', (cellPtr(rec, col) || cellFx(rec, col)) && (cellFx(rec, col) ? 'fx-cell' : 'ptr-cell'), isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
                       @mousedown.stop="onCellMouseDown($event, rec, col)"
                       @mouseenter="onCellMouseEnter(rec, col)"
                       @contextmenu.prevent="openCtxMenu($event, 'cell', rec, col)">
@@ -581,12 +581,11 @@
                       <span class="uppercase tracking-wide">{{ typeShort(col.type) }}</span>
                       <span v-if="col.required" class="text-red-300">Required</span>
                     </label>
-                    <div v-if="isComputedCell(formRecord, col)" class="rounded-lg bg-ink-850 border border-line px-3 py-2 text-sm text-mute">
+                    <div v-if="cellHardLocked(formRecord, col)" class="rounded-lg bg-ink-850 border border-line px-3 py-2 text-sm text-mute">
                       {{ displayValue(formRecord, col) || '—' }}
                     </div>
-                    <p v-if="isComputedCell(formRecord, col) && isKeyLink(col)" class="text-[11px] text-gold">Filled by XLOOKUP from {{ keySourceLabel(col) }}.</p>
-                    <p v-else-if="isComputedCell(formRecord, col) && cellFx(formRecord, col)" class="text-[11px] text-gold">This cell looks up using the cell above (column rule off here only).</p>
-                    <p v-else-if="isComputedCell(formRecord, col) && col.type==='lookup'" class="text-[11px] text-gold">Live field from the linked row.</p>
+                    <p v-if="cellHardLocked(formRecord, col) && isKeyLink(col)" class="text-[11px] text-gold">Filled by XLOOKUP from {{ keySourceLabel(col) }}. Type the key in {{ keySourceLabel(col) }}.</p>
+                    <p v-else-if="cellHardLocked(formRecord, col) && col.type==='lookup'" class="text-[11px] text-gold">Live field from the linked row.</p>
                     <template v-else-if="col.type==='attachment'">
                       <attach-cell :column="effectiveCol(formRecord, col)" :record="formRecord" variant="form" :locked="!!formRecord.locked" @commit="onFormCommit" @open="openAttachment" />
                     </template>
@@ -2189,6 +2188,7 @@
       }
       if (col.type === 'currency' || col.type === 'number' || col.type === 'percent') return formatNumber(v, col);
       if ((col.type === 'date' || col.type === 'datetime') && v) return formatDateDMY(v);
+      if (v && parseDateValue(v) && !isLinkCol(col) && col.type !== 'checkbox') return formatDateDMY(v);
       if (col.type === 'attachment') return isAttachMeta(v) ? v.name : '';
       if (isAttachMeta(v)) return v.name;
       return v == null ? '' : String(v);
@@ -2597,9 +2597,14 @@
         }
       },
       mounted() {
+        const fx = cellFxOf(this.record, this.column);
         const ptr = cellPtrOf(this.record, this.column);
-        if (ptr) {
+        if (fx) {
+          this.buffer = '=' + fx;
+        } else if (ptr) {
           this.buffer = '=' + ptr;
+        } else if (hasFormula(this.column) && !cellOwnOf(this.record, this.column) && !formulaUsesTypedValue(this.column)) {
+          this.buffer = '=' + String(this.column.formula.expression || '').trim();
         } else {
           const v = rawStored(this.record, this.column);
           if (this.column.type !== 'checkbox') this.buffer = this.toBuffer(v);
@@ -3338,7 +3343,7 @@
           rec.fx[col.id] = e;
           if (rec.followCol) delete rec.followCol[col.id];
           rec.updatedAt = nowIso();
-          if (!quiet) this.toast('This cell looks up using the cell above. The column rule is off here only.');
+          if (!quiet) this.toast('This cell has its own formula. Other rows keep the column.');
           return true;
         },
         setCellOwn(rec, col, quiet) {
@@ -3433,12 +3438,16 @@
           if (this.isKeyLink(col) && col.link.keyColumnId) return true;
           return false;
         },
-        isComputedCell(rec, col) {
+        cellHardLocked(rec, col) {
           if (!col) return false;
-          if (cellFxOf(rec, col) || cellPtrOf(rec, col)) return true;
           const use = effectiveColumn(rec, col);
-          if (skipsColumnRule(rec, col) && !cellRuleOf(rec, col)) return use.type === 'rollup' || use.type === 'autonumber';
-          return this.isComputed(use);
+          if (use.type === 'rollup' || use.type === 'autonumber') return true;
+          if (cellFxOf(rec, col) || cellPtrOf(rec, col) || cellOwnOf(rec, col) || cellRuleOf(rec, col) || skipsColumnRule(rec, col)) return false;
+          if (this.isKeyLink(use) && use.link && use.link.keyColumnId) return true;
+          return false;
+        },
+        isComputedCell(rec, col) {
+          return this.cellHardLocked(rec, col);
         },
         typeShort(t) {
           return ({ text: 'txt', longtext: 'note', number: 'num', currency: '$', percent: '%', date: 'date', datetime: 'time', select: 'sel', checkbox: 'chk', email: 'mail', phone: 'tel', url: 'url', attachment: 'file', autonumber: 'auto', link: 'link', search: 'find', lookup: 'lkp', formula: 'fx', rollup: 'sum' })[t] || t;
@@ -4288,13 +4297,11 @@
         },
         beginEdit(rec, col) {
           if (rec && rec.locked) return this.toast('This row is locked. Uncheck the lock to edit.');
-          if (this.isComputedCell(rec, col)) {
+          if (this.cellHardLocked(rec, col)) {
             if (col.type === 'autonumber') this.toast('Autonumber is assigned when the row is created.');
-            else if (cellFxOf(rec, col)) this.toast('This cell looks up from another cell. Right-click to type here or use the column rule again.');
-            else if (col.type === 'lookup') this.toast('This field follows the column lookup. Right-click this cell to type here, or look this up using the cell above.');
             else if (this.isKeyLink(col)) this.toast('This link is filled by XLOOKUP. Type the key in ' + this.keySourceLabel(col) + '.');
-            else if (hasFormula(col)) this.toast('This cell uses the column formula. Right-click to type here (this cell only) or look this up using the cell above.');
-            else this.toast('This formula is calculated from other columns. Use {This} to apply a formula to the value typed in this cell.');
+            else if (col.type === 'rollup') this.toast('This cell is a rollup from another sheet.');
+            else this.toast('This cell is calculated.');
             return;
           }
           this.selectedRecordId = rec.id;
@@ -4319,6 +4326,14 @@
           if (payload.record && payload.record.ptr) delete payload.record.ptr[payload.column.id];
           if (payload.record && payload.record.fx) delete payload.record.fx[payload.column.id];
           this.setCell(payload.record, payload.column, v);
+        },
+        coerceTypedValue(col, value) {
+          if (value == null || value === '' || typeof value === 'boolean' || typeof value === 'number') return value;
+          if (!col || ['link', 'search', 'select', 'checkbox', 'attachment', 'autonumber', 'rollup', 'lookup', 'number', 'currency', 'percent', 'email', 'phone', 'url'].includes(col.type)) return value;
+          if (typeof value === 'string' && /^\s*=/.test(value)) return value;
+          const d = parseDateValue(value);
+          if (d) return d.toISOString().slice(0, 10);
+          return value;
         },
         applyCellRule(rec, col, spec, dR, dC, quiet) {
           if (!rec || !col || rec.locked) return false;
@@ -4436,10 +4451,15 @@
             if (col.min != null && Number(value) < col.min) { if (!quiet) this.toast(col.name + ' is below minimum.', 'error'); return false; }
             if (col.max != null && Number(value) > col.max) { if (!quiet) this.toast(col.name + ' is above maximum.', 'error'); return false; }
           }
+          value = this.coerceTypedValue(col, value);
           rec.data[col.id] = value;
           if (rec.ptr) delete rec.ptr[col.id];
           if (rec.fx) delete rec.fx[col.id];
-          if (columnLocksTypedValue(col)) {
+          if (parseDateValue(value) && col.type !== 'date' && col.type !== 'datetime' && !['number', 'currency', 'percent'].includes(col.type)) {
+            if (!rec.rule) rec.rule = {};
+            rec.rule[col.id] = Object.assign({}, rec.rule[col.id] || {}, { type: 'date' });
+          }
+          if (columnLocksTypedValue(col) || hasFormula(col) || col.type === 'lookup' || col.type === 'formula') {
             if (!rec.own) rec.own = {};
             rec.own[col.id] = true;
           }
@@ -5317,15 +5337,32 @@
           const shifted = shiftA1InText(spec.fx, 1, 0);
           dest.fx[tot2.id] = shifted;
           if (shifted.indexOf('C2') < 0) console.warn('copied rule did not shift', shifted);
-          const typed = sampleWorkspace('TypeRule');
-          const cust2 = typed.tables.find((x) => x.name === 'Customers');
+          const typeWs = sampleWorkspace('TypeRule');
+          const cust2 = typeWs.tables.find((x) => x.name === 'Customers');
           const city2 = cust2.columns.find((c) => c.name === 'City');
           cust2.records[0].rule = {};
           cust2.records[0].rule[city2.id] = { type: 'number', decimals: 0 };
           cust2.records[0].data[city2.id] = 15;
-          const asNum = formatDisplay(typed, cust2, cust2.records[0], city2);
+          const asNum = formatDisplay(typeWs, cust2, cust2.records[0], city2);
           if (String(asNum).indexOf('15') < 0) console.warn('cell type rule failed', asNum);
-          if (formatDisplay(typed, cust2, cust2.records[1], city2) === asNum) console.warn('cell type should not leak to other rows');
+          if (formatDisplay(typeWs, cust2, cust2.records[1], city2) === asNum) console.warn('cell type should not leak to other rows');
+          const excel = sampleWorkspace('ExcelCells');
+          const ords = excel.tables.find((t) => t.name === 'Orders');
+          const follow = ords.columns.find((c) => c.name === 'Follow-up');
+          const orderDate = ords.columns.find((c) => c.name === 'Order Date');
+          const colFollow = formatDisplay(excel, ords, ords.records[1], follow);
+          ords.records[0].own = {};
+          ords.records[0].own[follow.id] = true;
+          ords.records[0].data[follow.id] = '2026-12-25';
+          const dateCell = formatDisplay(excel, ords, ords.records[0], follow);
+          if (dateCell !== '25/12/2026') console.warn('typed date over formula cell failed', dateCell);
+          if (formatDisplay(excel, ords, ords.records[1], follow) !== colFollow) console.warn('other row should keep column formula', formatDisplay(excel, ords, ords.records[1], follow), colFollow);
+          ords.records[1].ptr = {};
+          ords.records[1].ptr[follow.id] = a1Of(ords, ords.records[0], follow);
+          const fromRef = formatDisplay(excel, ords, ords.records[1], follow);
+          if (fromRef !== '25/12/2026') console.warn('cell as date ref failed', fromRef);
+          const fromOrder = formatDisplay(excel, ords, ords.records[0], orderDate);
+          if (!parseDateValue(fromOrder) && fromOrder.indexOf('/') < 0) console.warn('order date should be a date', fromOrder);
         },
         onPaste(e) {
           const target = e.target;
