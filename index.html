@@ -65,23 +65,11 @@
     .ctx-menu .kbd { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; color: #8ea0be; }
     .ctx-menu .danger { color: #fca5a5; }
     .ctx-sep { height: 1px; background: #223250; margin: 4px 0; }
+    .data-grid td.named-cell { box-shadow: inset 0 0 0 1px rgba(245,185,66,.45); }
+    .name-chip { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; color: #f5b942; background: rgba(245,185,66,.12); border-radius: 3px; padding: 0 4px; line-height: 14px; flex-shrink: 0; margin-top: 2px; }
+    .cell-name-box { width: 132px; height: 26px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; }
     .data-grid td.locked { color: #8ea0be; }
     .data-grid td.changed { box-shadow: inset 3px 0 0 #f5b942; }
-    .data-grid td.fx-cell { box-shadow: inset 0 0 0 1px rgba(62,207,190,.28); }
-    .fx-chip { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; letter-spacing: .02em; color: #3ecfbe; background: rgba(62,207,190,.12); border-radius: 3px; padding: 0 4px; line-height: 14px; flex-shrink: 0; margin-top: 2px; }
-    .fx-chip.col { color: #f5b942; background: rgba(245,185,66,.12); }
-    .formula-bar { display: flex; align-items: stretch; gap: 0; min-height: 36px; background: #10192c; border-bottom: 1px solid #223250; }
-    .formula-bar .name-box { width: 148px; flex-shrink: 0; border-right: 1px solid #223250; padding: 0 10px; display: flex; flex-direction: column; justify-content: center; }
-    .formula-bar .name-box .addr { font-size: 12px; font-weight: 600; color: #d7e0f2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .formula-bar .name-box .hint { font-size: 10px; color: #8ea0be; }
-    .formula-bar .fx-btn { width: 36px; flex-shrink: 0; border-right: 1px solid #223250; color: #f5b942; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; font-weight: 600; }
-    .formula-bar .fx-btn:hover { background: #1c2b48; }
-    .formula-bar input.fx-input { flex: 1; min-width: 0; background: #0b1220; border: 0; color: #d7e0f2; padding: 0 12px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; outline: none; }
-    .formula-bar input.fx-input:focus { box-shadow: inset 0 0 0 1px #3ecfbe; }
-    .formula-bar .fx-tools { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-left: 1px solid #223250; background: #10192c; }
-    .formula-bar select, .formula-bar .fx-tools button { font-size: 11px; border: 1px solid #2a3b5c; background: #152038; color: #d7e0f2; border-radius: 6px; padding: 4px 8px; }
-    .formula-bar .fx-tools button.primary { background: #3ecfbe; color: #0b1220; border-color: #3ecfbe; font-weight: 600; }
-    .formula-bar .fx-tools button:hover { filter: brightness(1.08); }
     .data-grid tr.row-locked td { background: rgba(245, 185, 66, 0.04); }
     .lock-btn { color: #8ea0be; padding: 2px; border-radius: 4px; line-height: 0; }
     .lock-btn:hover { color: #d7e0f2; background: rgba(0,0,0,.25); }
@@ -170,7 +158,7 @@
             <input v-model="setup.sample" type="checkbox" class="mt-1 accent-teal" />
             <span>
               <strong class="text-white">Load sample operations workspace</strong>
-              <span class="block text-mute">An Operations category with Customers, Products, Orders, and Line Items — XLOOKUP, formulas, and row-above totals. Add more categories yourself.</span>
+              <span class="block text-mute">Operations with a Search pad (named cell FindCustomer), Customers that filter from it, Products, Orders, and Line Items.</span>
             </span>
           </label>
           <button @click="completeSetup" class="w-full rounded-lg bg-teal text-ink-900 font-semibold py-2.5 hover:brightness-110">
@@ -417,6 +405,14 @@
                 <span class="text-[11px] text-mute shrink-0 hidden sm:inline">{{ kindLabel(currentTable.kind) }}</span>
               </button>
               <span class="text-xs text-mute truncate hidden xl:inline flex-1 min-w-0">{{ currentTable.description }}</span>
+              <label class="hidden sm:flex items-center gap-1 text-[11px] text-mute shrink-0" title="Name this cell (Excel-style). Other cells can point at it with {@Name}.">
+                <span>Name</span>
+                <input class="cell-name-box rounded-md bg-ink-900 border border-line px-2 outline-none focus:border-gold text-mist"
+                  :value="selectedCellName"
+                  :placeholder="selectedCell.colId ? 'e.g. FindCustomer' : ''"
+                  :disabled="!selectedCell.colId"
+                  @change="onNameBoxChange($event.target.value)" />
+              </label>
               <div class="ml-auto flex flex-wrap items-center gap-1">
                 <div class="rounded-lg border border-line overflow-hidden text-[11px] font-medium">
                   <button class="px-2 py-1" :class="view==='grid' ? 'bg-ink-700' : 'text-mute'" @click="view='grid'">Grid</button>
@@ -436,28 +432,6 @@
                 </button>
                 <button v-if="mode==='architect'" class="text-[11px] rounded-md px-2 py-1 border border-line hover:bg-ink-700" @click="openTableEditor(currentTable)">Edit sheet</button>
                 <button v-if="mode==='architect'" class="text-[11px] rounded-md px-2 py-1 border border-gold/50 text-gold hover:bg-gold/10" @click="openColumnEditor(null)">+ Column</button>
-              </div>
-            </div>
-
-            <div v-if="view==='grid' && visibleColumns.length" class="formula-bar shrink-0">
-              <div class="name-box">
-                <div class="addr">{{ formulaAddress }}</div>
-                <div class="hint">{{ formulaOriginHint }}</div>
-              </div>
-              <button type="button" class="fx-btn" title="Insert = and edit a formula for this cell" @click="startFormulaBar">fx</button>
-              <input ref="formulaBarInput" class="fx-input" v-model="formulaBar" spellcheck="false"
-                :placeholder="formulaBarPlaceholder"
-                @focus="formulaBarFocus=true"
-                @blur="formulaBarFocus=false"
-                @keydown="onFormulaBarKey" />
-              <div class="fx-tools">
-                <select v-model="formulaApply" title="Where this formula is written">
-                  <option value="cell">This cell</option>
-                  <option value="selection">Selection</option>
-                  <option value="column">Entire column</option>
-                </select>
-                <button type="button" class="primary" @click="applyFormulaBar">Apply</button>
-                <button type="button" @click="clearActiveFormula" title="Remove the formula from this cell so it is independent">Clear fx</button>
               </div>
             </div>
 
@@ -546,7 +520,7 @@
                     </td>
                     <td v-for="col in visibleColumns" :key="col.id"
                       class="px-0 align-top"
-                      :class="[isComputedCell(rec, col) && 'locked', cellChange(rec, col) && 'changed', formulaOrigin(rec, col)==='cell' && 'fx-cell', isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
+                      :class="[isComputedCell(rec, col) && 'locked', cellChange(rec, col) && 'changed', cellName(rec, col) && 'named-cell', isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
                       @mousedown.stop="onCellMouseDown($event, rec, col)"
                       @mouseenter="onCellMouseEnter(rec, col)"
                       @contextmenu.prevent="openCtxMenu($event, 'cell', rec, col)">
@@ -563,8 +537,7 @@
                             <cell-view :text="displayValue(rec, col)" :column="col" :raw="rawValue(rec, col)" />
                           </div>
                         </div>
-                        <span v-if="formulaOrigin(rec, col)==='cell'" class="fx-chip" title="Formula on this cell only">fx</span>
-                        <span v-else-if="formulaOrigin(rec, col)==='column'" class="fx-chip col" title="Column default formula — this row can override it">fx</span>
+                        <span v-if="cellName(rec, col)" class="name-chip" :title="'Named {@' + cellName(rec, col) + '} — other cells can point here'">@{{ cellName(rec, col) }}</span>
                       </div>
                     </td>
                   </tr>
@@ -606,7 +579,6 @@
                     </div>
                     <p v-if="isComputedCell(formRecord, col) && isKeyLink(col)" class="text-[11px] text-gold">Filled by XLOOKUP from {{ keySourceLabel(col) }}.</p>
                     <p v-else-if="isComputedCell(formRecord, col) && col.type==='lookup'" class="text-[11px] text-gold">Live field from the linked row.</p>
-                    <p v-else-if="formulaOrigin(formRecord, col)==='cell'" class="text-[11px] text-teal">Cell formula: {{ '=' + cellFormulaText(formRecord, col) }}</p>
                     <template v-else-if="col.type==='attachment'">
                       <attach-cell :column="col" :record="formRecord" variant="form" :locked="!!formRecord.locked" @commit="onFormCommit" @open="openAttachment" />
                     </template>
@@ -615,8 +587,7 @@
                     </template>
                     <template v-else>
                       <field-input ref="formFields" :key="formRecord.id + '-' + col.id" :column="col" :record="formRecord" :table="currentTable" :store="store" variant="form" @commit="onFormCommit" />
-                      <p v-if="hasFormula(col) && formulaOrigin(formRecord, col)==='column'" class="text-[11px] text-gold">Column default formula — type <span class="font-mono">=</span> here or use the formula bar for this cell only. Result: {{ displayValue(formRecord, col) || '—' }}</p>
-                      <p v-else-if="formulaOrigin(formRecord, col)==='cell'" class="text-[11px] text-teal">This cell: {{ displayValue(formRecord, col) || '—' }}</p>
+                      <p v-if="hasFormula(col)" class="text-[11px] text-gold">Formula result: {{ displayValue(formRecord, col) || '—' }}</p>
                     </template>
                     <p v-if="col.description" class="text-[11px] text-mute">{{ col.description }}</p>
                   </div>
@@ -632,6 +603,9 @@
 
             <footer class="min-h-8 shrink-0 border-t border-line px-3 py-1 flex flex-wrap items-center text-[11px] text-mute gap-x-4 gap-y-1">
               <span>{{ filteredRecords.length }} shown · {{ currentTable.records.length }} total<span v-if="hiddenColumnCount"> · {{ hiddenColumnCount }} hidden column{{ hiddenColumnCount===1 ? '' : 's' }}</span><span v-if="hiddenRowCount"> · {{ hiddenRowCount }} hidden row{{ hiddenRowCount===1 ? '' : 's' }}</span></span>
+              <button v-if="currentTable.rowFilter && currentTable.rowFilter.name" type="button" class="text-[11px] rounded-md px-2 py-0.5 border border-gold/40 text-gold hover:bg-gold/10" :title="'Live filter from named cell'" @click="openFilterDlg">
+                Filter {{ columnName(currentTable.rowFilter.columnId) }} {{ currentTable.rowFilter.mode==='equals' ? '=' : 'contains' }} @{{ currentTable.rowFilter.name }}
+              </button>
               <span v-if="sort.colId">Sorted by {{ columnName(sort.colId) }}</span>
               <span v-if="selectionStats" class="text-mist">
                 <template v-if="selectionStats.numeric">Sum {{ selectionStats.sumLabel }} · Avg {{ selectionStats.avgLabel }} · </template>{{ selectionStats.count }} selected
@@ -802,9 +776,15 @@
           </label>
           <div v-if="colEditor.draft.link.mode==='key'" class="grid md:grid-cols-2 gap-3">
             <label class="text-sm">Type the key in
-              <select v-model="colEditor.draft.link.keyColumnId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
+              <select v-model="colEditor.draft.link.keyColumnId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2" @change="colEditor.draft.link.keyName=''">
                 <option value="">This column</option>
                 <option v-for="c in keySourceColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
+              </select>
+            </label>
+            <label class="text-sm">Or a named cell (one value for the whole column)
+              <select v-model="colEditor.draft.link.keyName" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2" @change="onKeyNameChange">
+                <option value="">— none —</option>
+                <option v-for="n in namedCells" :key="n.id" :value="n.name">@{{ n.name }}</option>
               </select>
             </label>
             <label class="text-sm">Find that key on (related column)
@@ -847,8 +827,9 @@
             <span class="font-mono text-gold">{This[-1]}+1</span> increments it.
             Ranges: <span class="font-mono text-gold">SUM({Qty[-2:0]})</span> is Qty on this row and the two above.
             Dates are day/month/year: <span class="font-mono text-gold">01/01/2026+1</span> → <span class="font-mono text-gold">02/01/2026</span>.
-            Leave this blank if you want formulas on individual cells from the formula bar.
-            If you fill it in, it is the <span class="text-mist">column default</span> — every row uses it unless that cell has its own formula.
+            Point at a named cell with <span class="font-mono text-gold">{@FindCustomer}</span> (Excel name / coding variable).
+            <span class="font-mono text-gold">FILTER("Customers","Name",{@FindCustomer},"Name")</span> searches another sheet using that cell.
+            Column formulas still fill every row by default.
           </div>
           <textarea v-model="colEditor.draft.formula.expression" rows="3" class="w-full rounded-lg bg-ink-900 border border-line px-3 py-2 font-mono text-sm" placeholder="{This[-1]}+1"></textarea>
           <div class="flex flex-wrap gap-1">
@@ -856,6 +837,7 @@
             <button type="button" class="text-[11px] px-2 py-1 rounded bg-gold/20 text-gold hover:bg-gold/30" @click="insertFormulaText('{This[-1]}')">{ This[-1] } row above</button>
             <button type="button" class="text-[11px] px-2 py-1 rounded bg-gold/20 text-gold hover:bg-gold/30" @click="insertFormulaText('{This[-1]}+1')">{ This[-1] }+1</button>
             <button type="button" class="text-[11px] px-2 py-1 rounded bg-gold/20 text-gold hover:bg-gold/30" @click="insertFormulaText('ABOVE()+1')">ABOVE()+1</button>
+            <button v-for="n in namedCells" :key="n.id" type="button" class="text-[11px] px-2 py-1 rounded bg-gold/20 text-gold hover:bg-gold/30" @click="insertFormulaText('{@' + n.name + '}')">{@ {{ n.name }} }</button>
             <button v-for="c in formulaInsertable" :key="c.id" type="button" class="text-[11px] px-2 py-1 rounded bg-ink-700 hover:bg-ink-700/80" @click="insertFormulaRef(c.name)">{ {{ c.name }} }</button>
           </div>
           <div class="flex flex-wrap items-end gap-2 pt-1">
@@ -1032,6 +1014,38 @@
               </tr>
             </tbody>
           </table>
+        </div>
+      </modal-frame>
+
+      <!-- Name / filter cell -->
+      <modal-frame v-if="nameDlg.open" :title="nameDlg.mode==='filter' ? 'Filter this sheet from a named cell' : 'Name this cell'" @close="nameDlg.open=false">
+        <p class="text-sm text-mute mb-3">{{ nameDlg.mode==='filter' ? 'Rows stay visible only when this column matches the named cell. Empty named cell shows every row. This is the Excel filter + coding parameter mix.' : 'Give this cell a name, like a variable. Other cells and sheets can point to it with {@Name} or FILTER.' }}</p>
+        <label v-if="nameDlg.mode==='name'" class="block text-sm mb-3">Name
+          <input v-model.trim="nameDlg.text" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2 font-mono" placeholder="FindCustomer" />
+        </label>
+        <template v-else>
+          <label class="block text-sm mb-3">Named cell
+            <select v-model="nameDlg.text" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
+              <option value="">Select…</option>
+              <option v-for="n in namedCells" :key="n.id" :value="n.name">@{{ n.name }}</option>
+            </select>
+          </label>
+          <label class="block text-sm mb-3">Match column on this sheet
+            <select v-model="nameDlg.columnId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
+              <option v-for="c in visibleColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </label>
+          <label class="block text-sm mb-3">Match
+            <select v-model="nameDlg.match" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
+              <option value="contains">Contains</option>
+              <option value="equals">Equals</option>
+            </select>
+          </label>
+        </template>
+        <div class="flex justify-end gap-2">
+          <button class="px-3 py-1.5 text-sm" @click="nameDlg.open=false">Cancel</button>
+          <button v-if="nameDlg.mode==='filter' && currentTable && currentTable.rowFilter" class="px-3 py-1.5 text-sm" @click="clearSheetFilter">Clear filter</button>
+          <button class="px-3 py-1.5 text-sm rounded-lg bg-gold text-ink-900 font-semibold" @click="saveNameDlg">{{ nameDlg.mode==='filter' ? 'Apply filter' : 'Save name' }}</button>
         </div>
       </modal-frame>
 
@@ -1311,6 +1325,7 @@
         settings: { orgName: '', pinHash: '' },
         groups: [],
         tables: [],
+        names: [],
         audit: []
       };
     }
@@ -1320,6 +1335,7 @@
       if (!Array.isArray(store.groups)) store.groups = [];
       if (!Array.isArray(store.tables)) store.tables = [];
       if (!Array.isArray(store.audit)) store.audit = [];
+      if (!Array.isArray(store.names)) store.names = [];
       if (!store.settings) store.settings = { orgName: '', pinHash: '' };
       if (!store.groups.length && store.tables.length) {
         store.groups.push({ id: 'grp_default', name: 'Sheets', collapsed: false, kind: 'program', color: 'teal' });
@@ -1337,11 +1353,13 @@
         if (!t.kind) t.kind = (g && g.kind) || 'program';
         if (!t.color) t.color = 'teal';
         if (t.rowHeadWidth == null || t.rowHeadWidth < 40) t.rowHeadWidth = 52;
+        if (t.rowFilter && !t.rowFilter.name) t.rowFilter = null;
         (t.columns || []).forEach((c) => {
           if (c.width == null) c.width = 160;
           if (c.type === 'search' && c.link) {
             if (!c.link.searchScope) c.link.searchScope = 'row';
             if (c.link.searchColumnId == null) c.link.searchColumnId = c.link.displayColumnId || '';
+            if (c.link.keyName == null) c.link.keyName = '';
           }
         });
         (t.records || []).forEach((r) => {
@@ -1371,6 +1389,41 @@
     function colByName(table, name) {
       const n = String(name || '').trim().toLowerCase();
       return table.columns.find((c) => c.name.toLowerCase() === n);
+    }
+    function namedCellDef(store, name) {
+      const n = String(name || '').replace(/^@/, '').trim().toLowerCase();
+      if (!n || !store || !Array.isArray(store.names)) return null;
+      return store.names.find((x) => String(x.name || '').toLowerCase() === n) || null;
+    }
+    function namedCellValue(store, name, stack) {
+      const def = namedCellDef(store, name);
+      if (!def) throw new Error('Unknown name ' + name);
+      const t = findTable(store, def.tableId);
+      const rec = t && t.records.find((r) => r.id === def.recId);
+      const col = t && findColumn(t, def.colId);
+      if (!t || !rec || !col) return '';
+      stack = stack || new Set();
+      const key = 'name:' + def.id;
+      if (stack.has(key)) return '#CYCLE!';
+      stack.add(key);
+      return valueOf(store, t, rec, col, stack);
+    }
+    function displayNamedCell(store, name) {
+      const def = namedCellDef(store, name);
+      if (!def) return '';
+      const t = findTable(store, def.tableId);
+      const rec = t && t.records.find((r) => r.id === def.recId);
+      const col = t && findColumn(t, def.colId);
+      if (!t || !rec || !col) return '';
+      return formatDisplay(store, t, rec, col);
+    }
+    function cellNameOf(store, rec, col) {
+      if (!store || !rec || !col) return '';
+      const hit = (store.names || []).find((n) => n.recId === rec.id && n.colId === col.id);
+      return hit ? hit.name : '';
+    }
+    function validCellName(s) {
+      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(s || '').trim());
     }
 
     /* ---------------- dates (Excel-style, day/month/year) ---------------- */
@@ -1409,40 +1462,12 @@
     function escapeRegExp(s) {
       return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
-    function cellFormulaExpr(rec, col) {
-      if (!rec || !col || !rec.formulas) return '';
-      return String(rec.formulas[col.id] || '').trim();
-    }
-    function columnFormulaExpr(col) {
-      return hasFormula(col) ? String(col.formula.expression).trim() : '';
-    }
-    function cellIgnoresColumnFormula(rec, col) {
-      return !!(rec && col && rec.formulaOff && rec.formulaOff[col.id]);
-    }
-    function effectiveFormulaExpr(rec, col) {
-      const own = cellFormulaExpr(rec, col);
-      if (own) return own;
-      if (cellIgnoresColumnFormula(rec, col)) return '';
-      return columnFormulaExpr(col);
-    }
-    function formulaOriginOf(rec, col) {
-      if (cellFormulaExpr(rec, col)) return 'cell';
-      if (cellIgnoresColumnFormula(rec, col)) return 'value';
-      if (columnFormulaExpr(col)) return 'column';
-      return '';
-    }
-    function formulaUsesTypedValueExpr(expr, col) {
-      if (!expr) return false;
+    function formulaUsesTypedValue(col) {
+      if (!hasFormula(col)) return false;
+      const expr = col.formula.expression;
       if (/\{\s*(This|Self|Value)\s*\}/i.test(expr)) return true;
-      if (col && col.name && new RegExp('\\{\\s*' + escapeRegExp(col.name) + '\\s*\\}', 'i').test(expr)) return true;
+      if (col.name && new RegExp('\\{\\s*' + escapeRegExp(col.name) + '\\s*\\}', 'i').test(expr)) return true;
       return false;
-    }
-    function formulaUsesTypedValue(col, rec) {
-      const expr = rec ? effectiveFormulaExpr(rec, col) : columnFormulaExpr(col);
-      return formulaUsesTypedValueExpr(expr, col);
-    }
-    function stripFormulaEquals(s) {
-      return String(s == null ? '' : s).trim().replace(/^=+/, '').trim();
     }
     function asFormulaValue(v, col) {
       if (col && (col.type === 'date' || col.type === 'datetime' || (col.formula && col.formula.resultType === 'date'))) {
@@ -1712,6 +1737,14 @@
           return d.getUTCDate();
         }
         if (f === 'XLOOKUP') return formulaXlookup(ctx, args);
+        if (f === 'REF' || f === 'NAME') {
+          if (!ctx || !ctx.store) throw new Error('REF needs a workspace');
+          return namedCellValue(ctx.store, String(args[0] ?? ''), ctx.stack);
+        }
+        if (f === 'FILTER') {
+          if (!ctx || !ctx.store) throw new Error('FILTER needs a workspace');
+          return formulaFilter(ctx, args);
+        }
         if (f === 'ROW') {
           if (!ctx || !ctx.table || !ctx.rec) throw new Error('ROW needs a row');
           return rowIndex(ctx.table, ctx.rec) + 1;
@@ -1790,7 +1823,9 @@
       if (!isLinkCol(col)) return rawStored(rec, col);
       if (col.link.mode === 'key') {
         let key = null;
-        if (col.link.keyColumnId) {
+        if (col.link.keyName) {
+          try { key = namedCellValue(store, col.link.keyName, new Set()); } catch (e) { key = null; }
+        } else if (col.link.keyColumnId) {
           const keyCol = findColumn(table, col.link.keyColumnId);
           key = keyCol ? rawStored(rec, keyCol) : null;
         } else {
@@ -1803,6 +1838,27 @@
         return found ? found.id : null;
       }
       return rawStored(rec, col);
+    }
+
+    function formulaFilter(ctx, args) {
+      const tableName = String(args[0] ?? '');
+      const matchName = String(args[1] ?? '');
+      const query = args[2];
+      const returnName = args.length > 3 ? String(args[3] ?? '') : matchName;
+      if (query == null || query === '') return '';
+      const table = ctx.store.tables.find((t) => t.name.toLowerCase() === tableName.toLowerCase());
+      if (!table) throw new Error('Unknown table ' + tableName);
+      const matchCol = colByName(table, matchName);
+      const retCol = colByName(table, returnName);
+      if (!matchCol) throw new Error('Unknown match column ' + matchName);
+      if (!retCol) throw new Error('Unknown return column ' + returnName);
+      const q = String(query).trim().toLowerCase();
+      const hits = table.records.map((r) => {
+        const shown = String(formatDisplay(ctx.store, table, r, matchCol) || '').toLowerCase();
+        return shown.includes(q) ? valueOf(ctx.store, table, r, retCol, ctx.stack) : null;
+      }).filter((x) => x !== null && x !== '');
+      if (!hits.length) return '';
+      return hits.length === 1 ? hits[0] : hits;
     }
 
     function formulaXlookup(ctx, args) {
@@ -1870,8 +1926,7 @@
         if (!lr || !fc) return '';
         return valueOf(store, lt, lr, fc, stack);
       }
-      const expr = effectiveFormulaExpr(rec, col);
-      if (expr) {
+      if (hasFormula(col)) {
         const key = table.id + ':' + rec.id + ':' + col.id;
         if (stack.has(key)) return '#CYCLE!';
         stack.add(key);
@@ -1879,7 +1934,7 @@
           resolve(name) { return resolveRef(store, table, rec, name, stack, col); },
           store, table, rec, col, stack
         };
-        const r = evaluateFormula(expr, ctx);
+        const r = evaluateFormula(col.formula && col.formula.expression, ctx);
         return r.ok ? r.value : r.value;
       }
       return rawStored(rec, col);
@@ -1887,7 +1942,7 @@
 
     function valueOf(store, table, rec, col, stack) {
       if (!col) return null;
-      if (col.type === 'rollup' || col.type === 'lookup' || effectiveFormulaExpr(rec, col)) return computeValue(store, table, rec, col, stack);
+      if (col.type === 'rollup' || col.type === 'lookup' || hasFormula(col)) return computeValue(store, table, rec, col, stack);
       if (isLinkCol(col)) return resolveLinkRecordId(store, table, rec, col);
       return asFormulaValue(rawStored(rec, col), col);
     }
@@ -1917,8 +1972,12 @@
       const rawName = parsed.name;
       let col = null;
       const isThis = /^(this|self|value)$/i.test(rawName);
+      const named = rawName.charAt(0) === '@' || (!colByName(table, rawName) && namedCellDef(store, rawName));
+      if (named && parsed.offStart == null) {
+        return namedCellValue(store, rawName, stack);
+      }
       if (isThis) {
-        if (!selfCol) throw new Error('{This} is only valid in a cell or column formula');
+        if (!selfCol) throw new Error('{This} is only valid in a column formula');
         col = selfCol;
       } else {
         col = colByName(table, rawName);
@@ -1979,7 +2038,7 @@
         if (agg === 'count') return String(v ?? 0);
         return formatNumber(v, { type: 'currency', decimals: 2 });
       }
-      if (effectiveFormulaExpr(rec, col) || col.type === 'formula') return formatFormulaResult(valueOf(store, table, rec, col), col);
+      if (hasFormula(col)) return formatFormulaResult(valueOf(store, table, rec, col), col);
       const v = valueOf(store, table, rec, col);
       if (col.type === 'checkbox') return v ? 'Yes' : 'No';
       if (isLinkCol(col)) {
@@ -2000,18 +2059,20 @@
     }
 
     function sampleWorkspace(orgName) {
-      const customers = 'tbl_customers', products = 'tbl_products', orders = 'tbl_orders', lines = 'tbl_lines';
+      const customers = 'tbl_customers', products = 'tbl_products', orders = 'tbl_orders', lines = 'tbl_lines', pad = 'tbl_pad';
       const c = {
         name: 'col_c_name', code: 'col_c_code', email: 'col_c_email', phone: 'col_c_phone', city: 'col_c_city', status: 'col_c_status'
       };
       const p = { sku: 'col_p_sku', no: 'col_p_no', name: 'col_p_name', price: 'col_p_price', uom: 'col_p_uom', cat: 'col_p_cat', active: 'col_p_active' };
       const o = { num: 'col_o_num', cust: 'col_o_cust', date: 'col_o_date', status: 'col_o_status', po: 'col_o_po', pri: 'col_o_pri', notes: 'col_o_notes', hold: 'col_o_hold', follow: 'col_o_follow', file: 'col_o_file', count: 'col_o_count', total: 'col_o_total' };
       const l = { order: 'col_l_order', seq: 'col_l_seq', itemno: 'col_l_itemno', product: 'col_l_prod', cat: 'col_l_cat', qty: 'col_l_qty', price: 'col_l_price', total: 'col_l_total', run: 'col_l_run', notes: 'col_l_notes' };
+      const s = { q: 'col_pad_q', hit: 'col_pad_hit' };
       const rec = {
         c1: 'rec_cust_acme', c2: 'rec_cust_north', c3: 'rec_cust_blue', c4: 'rec_cust_brondby',
         p1: 'rec_prod_wa', p2: 'rec_prod_wb', p3: 'rec_prod_crate', p4: 'rec_prod_rush', p5: 'rec_prod_label',
         o1: 'rec_ord_41', o2: 'rec_ord_42',
-        l1: 'rec_line_1', l2: 'rec_line_2', l3: 'rec_line_3', l4: 'rec_line_4'
+        l1: 'rec_line_1', l2: 'rec_line_2', l3: 'rec_line_3', l4: 'rec_line_4',
+        pad1: 'rec_pad_1'
       };
       const ts = nowIso();
       const grpOps = 'grp_ops';
@@ -2021,9 +2082,23 @@
         groups: [
           { id: grpOps, name: 'Operations', collapsed: false, kind: 'program', color: 'teal' }
         ],
+        names: [
+          { id: 'nm_findcust', name: 'FindCustomer', tableId: pad, recId: rec.pad1, colId: s.q }
+        ],
         tables: [
           {
-            id: customers, name: 'Customers', groupId: grpOps, description: 'Bill-to accounts used on sales orders', color: 'teal',
+            id: pad, name: 'Search pad', groupId: grpOps, description: 'One named cell (FindCustomer). Type here; Customers filters from it, and Customer match points at it.', color: 'gold',
+            columns: [
+              { id: s.q, name: 'Find', type: 'text', width: 200, description: 'Named FindCustomer. Change this cell; other sheets follow.' },
+              { id: s.hit, name: 'Customer match', type: 'formula', formula: { expression: 'FILTER("Customers","Name",{@FindCustomer},"Name")', resultType: 'text' }, description: 'Points at {@FindCustomer} and searches Customers.' }
+            ],
+            records: [
+              { id: rec.pad1, createdAt: ts, updatedAt: ts, data: { [s.q]: '' } }
+            ]
+          },
+          {
+            id: customers, name: 'Customers', groupId: grpOps, description: 'Bill-to accounts used on sales orders. Live-filtered from named cell FindCustomer on Search pad.', color: 'teal',
+            rowFilter: { name: 'FindCustomer', columnId: c.name, mode: 'contains' },
             columns: [
               { id: c.code, name: 'Account', type: 'text', required: true, unique: true },
               { id: c.name, name: 'Name', type: 'text', required: true },
@@ -2333,8 +2408,6 @@
       },
       computed: {
         editType() {
-          if (String(this.buffer || '').trim().startsWith('=')) return 'text';
-          if (cellFormulaExpr(this.record, this.column)) return 'text';
           if (this.column.type !== 'formula') return this.column.type;
           const rt = this.column.formula && this.column.formula.resultType;
           if (rt === 'date') return 'date';
@@ -2404,13 +2477,8 @@
         }
       },
       mounted() {
-        const fx = cellFormulaExpr(this.record, this.column);
-        if (fx) {
-          this.buffer = '=' + fx;
-        } else {
-          const v = rawStored(this.record, this.column);
-          if (this.column.type !== 'checkbox') this.buffer = this.toBuffer(v);
-        }
+        const v = rawStored(this.record, this.column);
+        if (this.column.type !== 'checkbox') this.buffer = this.toBuffer(v);
         if (this.isKeySelfLink && this.linkedTable) {
           const matchCol = findColumn(this.linkedTable, this.column.link.matchColumnId);
           const linked = this.linkedTable.records.find((r) => r.id === v);
@@ -2443,11 +2511,6 @@
           const el = this.$refs.input;
           if (el && typeof el.value === 'string') this.buffer = el.value;
           let v = this.buffer;
-          if (typeof v === 'string' && v.trim().startsWith('=')) {
-            this.$emit('commit', { record: this.record, column: this.column, formula: stripFormulaEquals(v) });
-            this.dirty = false;
-            return;
-          }
           if (this.isDateEdit()) {
             if (v === '' || v == null) { this.emitCommit(null); this.dirty = false; return; }
             const d = parseDateValue(v);
@@ -2689,11 +2752,9 @@
           selectingDrag: false,
           selectMode: 'cells',
           ctxMenu: { open: false, x: 0, y: 0, kind: 'cell' },
+          nameDlg: { open: false, mode: 'name', text: '', columnId: '', match: 'contains' },
           formulaRel: { colName: 'This', offset: -1 },
           editing: { recId: null, colId: null },
-          formulaBar: '',
-          formulaBarFocus: false,
-          formulaApply: 'cell',
           search: '',
           sort: { colId: null, dir: 'asc' },
           view: 'grid',
@@ -2777,38 +2838,15 @@
           if (!this.currentTable || !this.selectedRecordId) return null;
           return this.currentTable.records.find((r) => r.id === this.selectedRecordId) || null;
         },
-        activeFormulaRec() {
-          const t = this.currentTable;
-          if (!t || !this.selectedCell || !this.selectedCell.recId) return this.selectedRecord;
-          return t.records.find((r) => r.id === this.selectedCell.recId) || this.selectedRecord;
-        },
-        activeFormulaCol() {
-          const t = this.currentTable;
-          if (!t || !this.selectedCell || !this.selectedCell.colId) return null;
-          return findColumn(t, this.selectedCell.colId);
-        },
-        formulaAddress() {
-          const rec = this.activeFormulaRec;
-          const col = this.activeFormulaCol;
-          if (!col || !rec || !this.currentTable) return '—';
-          const idx = this.filteredRecords.findIndex((r) => r.id === rec.id);
-          return col.name + ' · R' + (idx < 0 ? '?' : idx + 1);
-        },
-        formulaOriginHint() {
-          const rec = this.activeFormulaRec;
-          const col = this.activeFormulaCol;
-          const o = this.formulaOrigin(rec, col);
-          if (o === 'cell') return 'This cell only';
-          if (o === 'column') return 'Column default';
-          if (o === 'value') return 'Independent value';
-          const n = this.selectedCellEntries().length;
-          if (n > 1) return n + ' cells selected';
-          return 'Independent cell';
-        },
-        formulaBarPlaceholder() {
-          return 'Type a value, or ={Qty}*{Unit Price} for this cell';
-        },
         formRecord() { return this.selectedRecord; },
+        namedCells() { return this.store.names || []; },
+        selectedCellName() {
+          const t = this.currentTable;
+          if (!t || !this.selectedCell || !this.selectedCell.recId) return '';
+          const rec = t.records.find((r) => r.id === this.selectedCell.recId);
+          const col = findColumn(t, this.selectedCell.colId);
+          return rec && col ? cellNameOf(this.store, rec, col) : '';
+        },
         hiddenColumnCount() { return this.currentTable ? this.currentTable.columns.filter((c) => c.hidden).length : 0; },
         hiddenRowCount() { return this.currentTable ? this.currentTable.records.filter((r) => r.hidden).length : 0; },
         selectedRecords() {
@@ -2829,9 +2867,11 @@
             { id: 'duplicate', label: nRows ? 'Duplicate ' + nRows + ' ' + rowWord : 'Duplicate row', kbd: 'Ctrl+D', disabled: !nRows },
             { sep: true },
             { id: 'fill', label: 'Fill down', disabled: cells.length < 2 },
-            { id: 'fxcell', label: 'Formula → this cell', disabled: !hasSel },
-            { id: 'fxsel', label: 'Formula → selection', disabled: cells.length < 2 },
-            { id: 'clearfx', label: 'Clear formula (keep independent)', disabled: !hasSel },
+            { sep: true },
+            { id: 'namecell', label: 'Name this cell…', disabled: cells.length !== 1 },
+            { id: 'gotoname', label: 'Go to named cell…', disabled: !this.namedCells.length },
+            { id: 'filtername', label: 'Filter sheet from named cell…' },
+            { sep: true },
             { id: 'clear', label: 'Clear cells', kbd: 'Del', disabled: !hasSel },
             { id: 'insert', label: 'Insert row below', disabled: !this.canAddRows },
             { sep: true },
@@ -2887,6 +2927,17 @@
           const q = this.search.toLowerCase();
           if (q) {
             rows = rows.filter((r) => t.columns.some((c) => String(this.displayValue(r, c)).toLowerCase().includes(q)));
+          }
+          const rf = t.rowFilter;
+          if (rf && rf.name && rf.columnId) {
+            const needle = String(displayNamedCell(this.store, rf.name) || '').trim().toLowerCase();
+            if (needle) {
+              const col = findColumn(t, rf.columnId);
+              rows = rows.filter((r) => {
+                const hay = String(this.displayValue(r, col) || '').toLowerCase();
+                return rf.mode === 'equals' ? hay === needle : hay.includes(needle);
+              });
+            }
           }
           if (this.sort.colId) {
             const col = findColumn(t, this.sort.colId);
@@ -2990,170 +3041,97 @@
         store: {
           deep: true,
           handler() { this.schedulePersist(); }
-        },
-        selectedCell: {
-          deep: true,
-          handler() { this.syncFormulaBar(); }
-        },
-        currentTableId() { this.syncFormulaBar(); }
+        }
       },
       methods: {
         rawStored, displayForLink, hasFormula,
-        formulaOrigin(rec, col) { return formulaOriginOf(rec, col); },
-        cellFormulaText(rec, col) { return cellFormulaExpr(rec, col); },
-        syncFormulaBar() {
-          if (this.formulaBarFocus) return;
-          const rec = this.activeFormulaRec;
-          const col = this.activeFormulaCol;
-          if (!rec || !col) { this.formulaBar = ''; return; }
-          const fx = effectiveFormulaExpr(rec, col);
-          this.formulaBar = fx ? ('=' + fx) : this.displayValue(rec, col);
-        },
-        startFormulaBar() {
-          const rec = this.activeFormulaRec;
-          const col = this.activeFormulaCol;
-          if (!rec || !col) return this.toast('Select a cell first.', 'warn');
-          const fx = effectiveFormulaExpr(rec, col);
-          this.formulaBar = '=' + (fx || '');
-          this.$nextTick(() => {
-            const el = this.$refs.formulaBarInput;
-            if (el && el.focus) { el.focus(); el.setSelectionRange(this.formulaBar.length, this.formulaBar.length); }
-          });
-        },
-        onFormulaBarKey(e) {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            this.applyFormulaBar();
-          }
-          if (e.key === 'Escape') {
-            e.preventDefault();
-            this.syncFormulaBar();
-            this.focusGrid();
-          }
-        },
-        applyFormulaBar() {
-          const rec = this.activeFormulaRec;
-          const col = this.activeFormulaCol;
-          if (!rec || !col) return this.toast('Select a cell first.', 'warn');
-          const raw = String(this.formulaBar == null ? '' : this.formulaBar);
-          const asFormula = raw.trim().startsWith('=');
-          const expr = stripFormulaEquals(raw);
-          const scope = this.formulaApply;
-          if (scope === 'column') {
-            if (this.mode !== 'architect') return this.toast('Switch to Architect Mode to set a column default formula.', 'warn');
-            if (!col.formula) col.formula = { expression: '', resultType: 'auto' };
-            col.formula.expression = asFormula ? expr : '';
-            if (asFormula && !expr) col.formula.expression = '';
-            if (!asFormula && expr) {
-              return this.toast('Start with = to save a column formula, or use This cell for a value.', 'warn');
-            }
-            this.audit('column.update', this.currentTable.name + '.' + col.name, 'formula default');
-            this.toast(expr ? 'Column default formula set. Individual cells can still override it.' : 'Column default formula cleared.');
-            this.syncFormulaBar();
-            this.focusGrid();
-            return;
-          }
-          const targets = scope === 'selection' ? this.selectedCellEntries() : [{ rec, col }];
-          if (!targets.length) return;
-          let n = 0;
-          targets.forEach(({ rec: r, col: c }) => {
-            if (this.structureLocked(r, c)) return;
-            if (asFormula) {
-              if (this.writeCellFormula(r, c, expr, true)) n++;
-            } else {
-              const parsed = this.coercePasteValue(c, raw);
-              if (parsed.skip) return;
-              if (this.writeIndependentValue(r, c, parsed.value, true)) n++;
-            }
-          });
-          this.toast(n ? (asFormula
-            ? (scope === 'selection' ? 'Formula applied to ' + n + ' selected cells.' : 'Formula saved on this cell.')
-            : (scope === 'selection' ? 'Value applied to ' + n + ' selected cells.' : 'This cell is now independent of the column formula.')) : 'Nothing applied.', n ? undefined : 'warn');
-          this.syncFormulaBar();
-          this.focusGrid();
-        },
-        clearActiveFormula() {
-          const rec = this.activeFormulaRec;
-          const col = this.activeFormulaCol;
-          const scope = this.formulaApply;
-          if (scope === 'column') {
-            if (this.mode !== 'architect') return this.toast('Switch to Architect Mode to clear a column default formula.', 'warn');
-            if (!col) return;
-            if (!col.formula) col.formula = { expression: '', resultType: 'auto' };
-            col.formula.expression = '';
-            this.audit('column.update', this.currentTable.name + '.' + col.name, 'formula cleared');
-            this.toast('Column default formula cleared. Existing cell formulas are unchanged.');
-            this.syncFormulaBar();
-            return;
-          }
-          const targets = scope === 'selection' ? this.selectedCellEntries() : (rec && col ? [{ rec, col }] : []);
-          let n = 0;
-          targets.forEach(({ rec: r, col: c }) => {
-            if (this.structureLocked(r, c)) return;
-            this.clearCellFormula(r, c);
-            n++;
-          });
-          this.toast(n ? 'Formula removed from ' + n + ' cell' + (n === 1 ? '' : 's') + '. They no longer follow the column default.' : 'Nothing to clear.', n ? undefined : 'warn');
-          this.syncFormulaBar();
-        },
-        structureLocked(rec, col) {
-          if (!rec || !col) return true;
-          if (rec.locked) return true;
-          if (col.type === 'rollup' || col.type === 'autonumber' || col.type === 'lookup') return true;
-          if (this.isKeyLink(col) && col.link.keyColumnId) return true;
-          return false;
-        },
-        writeCellFormula(rec, col, expr, quiet) {
-          if (this.structureLocked(rec, col)) { if (!quiet) this.toast('This cell cannot take a formula.'); return false; }
-          const beforeMap = {};
-          this.currentTable.columns.forEach((c) => { beforeMap[c.id] = this.displayValue(rec, c); });
-          if (!rec.formulas) rec.formulas = {};
-          rec.formulas[col.id] = String(expr || '').trim();
-          if (rec.formulaOff) delete rec.formulaOff[col.id];
-          rec.updatedAt = nowIso();
-          this.noteCellAudit(rec, beforeMap);
-          this.audit('record.update', this.currentTable.name + '.' + col.name, '=' + rec.formulas[col.id]);
-          return true;
-        },
-        writeIndependentValue(rec, col, value, quiet) {
-          if (columnFormulaExpr(col) || cellFormulaExpr(rec, col)) {
-            if (!rec.formulaOff) rec.formulaOff = {};
-            rec.formulaOff[col.id] = true;
-            if (rec.formulas) delete rec.formulas[col.id];
-          }
-          return this.setCell(rec, col, value, quiet);
-        },
-        clearCellFormula(rec, col) {
-          if (rec.formulas) delete rec.formulas[col.id];
-          if (!rec.formulaOff) rec.formulaOff = {};
-          rec.formulaOff[col.id] = true;
-          rec.updatedAt = nowIso();
-        },
-        noteCellAudit(rec, beforeMap) {
+        cellName(rec, col) { return cellNameOf(this.store, rec, col); },
+        onNameBoxChange(val) {
           const t = this.currentTable;
-          if (!rec.audit) rec.audit = [];
-          t.columns.forEach((c) => {
-            const after = this.displayValue(rec, c);
-            const before = beforeMap[c.id];
-            if (String(after ?? '') === String(before ?? '')) return;
-            rec.audit.push({
-              id: uid('raud'),
-              at: nowIso(),
-              mode: this.mode,
-              action: 'cell',
-              colId: c.id,
-              column: c.name,
-              before: before == null ? '' : String(before),
-              after: after == null ? '' : String(after)
-            });
-            if (rec.audit.length > 400) rec.audit.splice(0, rec.audit.length - 300);
+          if (!t || !this.selectedCell.recId || !this.selectedCell.colId) return;
+          const rec = t.records.find((r) => r.id === this.selectedCell.recId);
+          const col = findColumn(t, this.selectedCell.colId);
+          this.setCellName(rec, col, val);
+        },
+        openNameDlg() {
+          const rec = this.selectedRecord;
+          const col = this.currentTable && findColumn(this.currentTable, this.selectedCell.colId);
+          if (!rec || !col) return this.toast('Select one cell first.', 'warn');
+          this.nameDlg = { open: true, mode: 'name', text: cellNameOf(this.store, rec, col) || '', columnId: col.id, match: 'contains' };
+        },
+        openFilterDlg() {
+          const colId = this.selectedCell.colId || (this.visibleColumns[0] && this.visibleColumns[0].id) || '';
+          const rf = this.currentTable && this.currentTable.rowFilter;
+          this.nameDlg = { open: true, mode: 'filter', text: (rf && rf.name) || (this.namedCells[0] && this.namedCells[0].name) || '', columnId: (rf && rf.columnId) || colId, match: (rf && rf.mode) || 'contains' };
+        },
+        saveNameDlg() {
+          if (this.nameDlg.mode === 'filter') {
+            if (!this.nameDlg.text) return this.toast('Pick a named cell.', 'warn');
+            if (!this.currentTable) return;
+            this.currentTable.rowFilter = { name: this.nameDlg.text, columnId: this.nameDlg.columnId, mode: this.nameDlg.match || 'contains' };
+            this.audit('table.filter', this.currentTable.name, '@' + this.nameDlg.text);
+            this.toast('This sheet now filters from @' + this.nameDlg.text + '.');
+            this.nameDlg.open = false;
+            return;
+          }
+          const rec = this.selectedRecord;
+          const col = this.currentTable && findColumn(this.currentTable, this.selectedCell.colId);
+          this.setCellName(rec, col, this.nameDlg.text);
+          this.nameDlg.open = false;
+        },
+        clearSheetFilter() {
+          if (this.currentTable) this.currentTable.rowFilter = null;
+          this.nameDlg.open = false;
+          this.toast('Sheet filter cleared.');
+        },
+        setCellName(rec, col, raw) {
+          const t = this.currentTable;
+          if (!t || !rec || !col) return;
+          const name = String(raw || '').trim().replace(/^@/, '');
+          if (!this.store.names) this.store.names = [];
+          this.store.names = this.store.names.filter((n) => !(n.recId === rec.id && n.colId === col.id));
+          if (!name) {
+            this.audit('name.clear', t.name + '.' + col.name, '');
+            this.toast('Cell name removed.');
+            return;
+          }
+          if (!validCellName(name)) return this.toast('Use a name like FindCustomer (letters, numbers, underscore).', 'warn');
+          const clash = this.store.names.find((n) => n.name.toLowerCase() === name.toLowerCase());
+          if (clash) return this.toast('That name is already used.', 'warn');
+          this.store.names.push({ id: uid('nm'), name, tableId: t.id, recId: rec.id, colId: col.id });
+          this.audit('name.set', t.name + '.' + col.name, '@' + name);
+          this.toast('Named {@' + name + '}. Other cells can point here or filter from it.');
+        },
+        goToNamedCell() {
+          const n = this.namedCells[0];
+          if (!n) return;
+          const pick = this.namedCells.length === 1 ? n : this.namedCells.find((x) => x.name === this.selectedCellName) || n;
+          this.selectTable(pick.tableId);
+          this.$nextTick(() => {
+            const t = this.currentTable;
+            const rec = t && t.records.find((r) => r.id === pick.recId);
+            const col = t && findColumn(t, pick.colId);
+            if (rec && col) this.applySelection({ recId: rec.id, colId: col.id }, { recId: rec.id, colId: col.id });
           });
+        },
+        pruneNames() {
+          const recIds = new Set();
+          const colIds = new Set();
+          (this.store.tables || []).forEach((t) => {
+            (t.records || []).forEach((r) => recIds.add(r.id));
+            (t.columns || []).forEach((c) => colIds.add(c.id));
+          });
+          this.store.names = (this.store.names || []).filter((n) => recIds.has(n.recId) && colIds.has(n.colId));
         },
         isKeyLink(col) {
           return !!(col && col.type === 'link' && col.link && col.link.mode === 'key');
         },
+        onKeyNameChange() {
+          if (this.colEditor.draft.link.keyName) this.colEditor.draft.link.keyColumnId = '';
+        },
         keySourceLabel(col) {
           if (!this.isKeyLink(col)) return '';
+          if (col.link.keyName) return '@' + col.link.keyName;
           if (!col.link.keyColumnId) return 'this column';
           const src = this.currentTable && findColumn(this.currentTable, col.link.keyColumnId);
           return src ? src.name : 'the key column';
@@ -3161,12 +3139,12 @@
         isComputed(col) {
           if (!col) return false;
           if (col.type === 'rollup' || col.type === 'autonumber' || col.type === 'lookup') return true;
-          if (this.isKeyLink(col) && col.link.keyColumnId) return true;
+          if (col.type === 'formula' && !formulaUsesTypedValue(col)) return true;
+          if (this.isKeyLink(col) && (col.link.keyColumnId || col.link.keyName)) return true;
           return false;
         },
         isComputedCell(rec, col) {
-          if (this.isComputed(col)) return true;
-          return false;
+          return this.isComputed(col);
         },
         typeShort(t) {
           return ({ text: 'txt', longtext: 'note', number: 'num', currency: '$', percent: '%', date: 'date', datetime: 'time', select: 'sel', checkbox: 'chk', email: 'mail', phone: 'tel', url: 'url', attachment: 'file', autonumber: 'auto', link: 'link', search: 'find', lookup: 'lkp', formula: 'fx', rollup: 'sum' })[t] || t;
@@ -3178,15 +3156,13 @@
         cellTitle(rec, col) {
           const ch = this.cellChange(rec, col);
           if (ch) return 'Was ' + (ch.before || 'blank') + ' → ' + (ch.after || 'blank');
-          const origin = formulaOriginOf(rec, col);
-          if (origin === 'cell') return 'Cell formula ' + cellFormulaExpr(rec, col) + ' → ' + this.displayValue(rec, col);
-          if (origin === 'column' && formulaUsesTypedValue(col, rec)) {
+          const nm = cellNameOf(this.store, rec, col);
+          if (nm) return '{@' + nm + '} — other cells can point here or filter from this value';
+          if (hasFormula(col) && formulaUsesTypedValue(col)) {
             const raw = rawStored(rec, col);
             const rawText = (col.type === 'date' || col.type === 'datetime') ? formatDateDMY(raw) : String(raw ?? '');
-            return 'Entered ' + rawText + ' → ' + this.displayValue(rec, col) + ' (column default)';
+            return 'Entered ' + rawText + ' → ' + this.displayValue(rec, col);
           }
-          if (origin === 'column') return 'Column default ' + columnFormulaExpr(col) + ' → ' + this.displayValue(rec, col);
-          if (origin === 'value') return 'Independent of the column formula: ' + this.displayValue(rec, col);
           return this.displayValue(rec, col);
         },
         rawValue(rec, col) { return valueOf(this.store, this.currentTable, rec, col); },
@@ -3558,6 +3534,7 @@
           if (inbound.length) return this.toast('Cannot delete: linked from ' + inbound.join(', '), 'error');
           if (!(await this.ask('Delete table', 'Delete ' + t.name + ' and all of its rows? This stays in the audit log.', { danger: true, ok: 'Delete' }))) return;
           this.store.tables = this.store.tables.filter((x) => x.id !== t.id);
+          this.pruneNames();
           if (this.currentTableId === t.id) this.currentTableId = this.store.tables[0] && this.store.tables[0].id;
           this.audit('table.delete', t.name, '');
         },
@@ -3565,7 +3542,7 @@
           return {
             name: '', type: type || 'text', required: false, unique: false, hidden: false, description: '', width: 160,
             options: [], decimals: 2, min: null, max: null, prefix: '', pad: 4, seq: 0,
-            link: { tableId: '', displayColumnId: '', mode: 'pick', matchColumnId: '', keyColumnId: '', notFound: 'blank', searchColumnId: '', searchScope: 'row' },
+            link: { tableId: '', displayColumnId: '', mode: 'pick', matchColumnId: '', keyColumnId: '', keyName: '', notFound: 'blank', searchColumnId: '', searchScope: 'row' },
             lookup: { linkColumnId: '', fieldColumnId: '' },
             formula: { expression: '', resultType: 'auto' },
             rollup: { childTableId: '', linkColumnId: '', aggregate: 'count', valueColumnId: '' },
@@ -3575,9 +3552,10 @@
         openColumnEditor(col) {
           if (this.mode !== 'architect') return;
           const draft = col ? clone(Object.assign(this.blankColumn(col.type), col)) : this.blankColumn('text');
-          if (!draft.link) draft.link = { tableId: '', displayColumnId: '', mode: 'pick', matchColumnId: '', keyColumnId: '', notFound: 'blank', searchColumnId: '', searchScope: 'row' };
+          if (!draft.link) draft.link = { tableId: '', displayColumnId: '', mode: 'pick', matchColumnId: '', keyColumnId: '', keyName: '', notFound: 'blank', searchColumnId: '', searchScope: 'row' };
           if (!draft.link.mode) draft.link.mode = 'pick';
           if (draft.link.keyColumnId == null) draft.link.keyColumnId = '';
+          if (draft.link.keyName == null) draft.link.keyName = '';
           if (!draft.link.notFound) draft.link.notFound = 'blank';
           if (!draft.link.searchScope) draft.link.searchScope = 'row';
           if (draft.link.searchColumnId == null) draft.link.searchColumnId = '';
@@ -3659,17 +3637,14 @@
           const d = this.colEditor.draft;
           if (!(await this.ask('Delete column', 'Delete ' + d.name + '? Existing values in this column are removed.', { danger: true, ok: 'Delete' }))) return;
           t.columns = t.columns.filter((c) => c.id !== d.id);
-          t.records.forEach((r) => {
-            delete r.data[d.id];
-            if (r.formulas) delete r.formulas[d.id];
-            if (r.formulaOff) delete r.formulaOff[d.id];
-          });
+          t.records.forEach((r) => { delete r.data[d.id]; });
+          this.pruneNames();
           this.audit('column.delete', t.name + '.' + d.name, '');
           this.colEditor.open = false;
         },
         blankRecord() {
           const t = this.currentTable;
-          const rec = { id: uid('rec'), createdAt: nowIso(), updatedAt: nowIso(), data: {}, formulas: {}, formulaOff: {}, audit: [], locked: false };
+          const rec = { id: uid('rec'), createdAt: nowIso(), updatedAt: nowIso(), data: {}, audit: [], locked: false };
           t.columns.forEach((col) => {
             if (col.type === 'checkbox') rec.data[col.id] = false;
             else if (col.type === 'autonumber') {
@@ -3713,7 +3688,7 @@
           const recs = this.selectedRecords;
           if (!t || !recs.length) return this.toast('Select a row first — click a row number, or right-click Duplicate.', 'warn');
           const clones = recs.map((src) => {
-            const rec = { id: uid('rec'), createdAt: nowIso(), updatedAt: nowIso(), data: clone(src.data || {}), formulas: clone(src.formulas || {}), formulaOff: clone(src.formulaOff || {}), audit: [], locked: false };
+            const rec = { id: uid('rec'), createdAt: nowIso(), updatedAt: nowIso(), data: clone(src.data || {}), audit: [], locked: false };
             t.columns.forEach((col) => {
               if (col.type === 'autonumber') {
                 col.seq = (col.seq || 0) + 1;
@@ -3751,18 +3726,12 @@
           let n = 0, skip = 0;
           colIds.forEach((cid) => {
             const col = cols.find((c) => c.id === cid);
-            const topFx = cellFormulaExpr(top, col);
+            const parsed = this.coercePasteValue(col, this.displayValue(top, col));
             recIds.slice(1).forEach((rid) => {
               const rec = rows.find((r) => r.id === rid);
               if (!rec || !col) return;
-              if (topFx) {
-                if (this.writeCellFormula(rec, col, topFx, true)) n++;
-                else skip++;
-                return;
-              }
-              const parsed = this.coercePasteValue(col, this.displayValue(top, col));
               if (parsed.skip) { skip++; return; }
-              if (this.writeIndependentValue(rec, col, parsed.value, true)) n++;
+              if (this.setCell(rec, col, parsed.value, true)) n++;
               else skip++;
             });
           });
@@ -3864,9 +3833,9 @@
           else if (id === 'paste') this.pasteFromClipboard();
           else if (id === 'duplicate') this.duplicateSelectedRows();
           else if (id === 'fill') this.fillDownSelection();
-          else if (id === 'fxcell') { this.formulaApply = 'cell'; this.startFormulaBar(); }
-          else if (id === 'fxsel') { this.formulaApply = 'selection'; this.startFormulaBar(); }
-          else if (id === 'clearfx') { this.formulaApply = this.selectedCellEntries().length > 1 ? 'selection' : 'cell'; this.clearActiveFormula(); }
+          else if (id === 'namecell') this.openNameDlg();
+          else if (id === 'gotoname') this.goToNamedCell();
+          else if (id === 'filtername') this.openFilterDlg();
           else if (id === 'clear') this.clearSelectedCells();
           else if (id === 'insert') this.insertRowBelow();
           else if (id === 'selrow') this.selectCurrentRows();
@@ -3993,23 +3962,17 @@
             if (col.type === 'autonumber') this.toast('Autonumber is assigned when the row is created.');
             else if (col.type === 'lookup') this.toast('This field is looked up from the linked row. Change the key or link to update it.');
             else if (this.isKeyLink(col)) this.toast('This link is filled by XLOOKUP. Type the key in ' + this.keySourceLabel(col) + '.');
-            else this.toast('This field is calculated. Change the input it depends on.');
+            else if (hasFormula(col)) this.toast('This cell uses the column formula.');
+            else this.toast('This formula is calculated from other columns. Use {This} to apply a formula to the value typed in this cell.');
             return;
           }
           this.selectedRecordId = rec.id;
           this.selectedCell = { recId: rec.id, colId: col.id };
           this.editing = { recId: rec.id, colId: col.id };
-          this.syncFormulaBar();
         },
-        cancelEdit() { this.editing = { recId: null, colId: null }; this.syncFormulaBar(); },
-        commitEdit(payload) { this.commitPayload(payload); this.cancelEdit(); },
-        onFormCommit(payload) { this.commitPayload(payload); },
-        commitPayload(payload) {
-          if (!payload) return;
-          if (payload.formula != null) this.writeCellFormula(payload.record, payload.column, payload.formula);
-          else this.writeIndependentValue(payload.record, payload.column, payload.value);
-          this.syncFormulaBar();
-        },
+        cancelEdit() { this.editing = { recId: null, colId: null }; },
+        commitEdit(payload) { this.setCell(payload.record, payload.column, payload.value); this.cancelEdit(); },
+        onFormCommit(payload) { this.setCell(payload.record, payload.column, payload.value); },
         setCell(rec, col, value, quiet) {
           const t = this.currentTable;
           if (rec.locked) { if (!quiet) this.toast('This row is locked. Uncheck the lock to edit.'); return false; }
@@ -4025,11 +3988,6 @@
             if (col.max != null && Number(value) > col.max) { if (!quiet) this.toast(col.name + ' is above maximum.', 'error'); return false; }
           }
           rec.data[col.id] = value;
-          if (columnFormulaExpr(col) || cellFormulaExpr(rec, col)) {
-            if (!rec.formulaOff) rec.formulaOff = {};
-            rec.formulaOff[col.id] = true;
-            if (rec.formulas) delete rec.formulas[col.id];
-          }
           rec.updatedAt = nowIso();
           if (isLinkCol(col) && (!col.link || col.link.mode !== 'key')) this.applyAutofill(t, rec, col, value);
           this.applyKeyLookups(t, rec, col);
@@ -4198,6 +4156,7 @@
           this.selectionAnchor = { recId: null, colId: null };
           this.selectionFocus = { recId: null, colId: null };
           recs.forEach((rec) => this.audit('record.delete', t.name, rec.id));
+          this.pruneNames();
           this.toast(recs.length === 1 ? 'Row deleted.' : recs.length + ' rows deleted.');
         },
         selectionTsv() {
@@ -4213,8 +4172,7 @@
             const rec = rows.find((r) => r.id === rid);
             return colIds.map((cid) => {
               const col = cols.find((c) => c.id === cid);
-              const fx = cellFormulaExpr(rec, col);
-              const s = fx ? ('=' + fx) : String(this.displayValue(rec, col) ?? '');
+              const s = String(this.displayValue(rec, col) ?? '');
               if (/[\t\n"]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
               return s.replace(/\n/g, ' ');
             }).join('\t');
@@ -4255,7 +4213,6 @@
         coercePasteValue(col, raw) {
           const s = String(raw == null ? '' : raw).trim();
           if (this.isComputed(col) || col.type === 'autonumber' || col.type === 'attachment') return { skip: true };
-          if (s.startsWith('=')) return { formula: stripFormulaEquals(s) };
           if (s === '') return { value: col.type === 'checkbox' ? false : null };
           if (col.type === 'checkbox') return { value: /^(yes|true|1|x|✓|checked)$/i.test(s) };
           if (['number', 'currency', 'percent'].includes(col.type)) {
@@ -4285,11 +4242,6 @@
           }
           return { value: s };
         },
-        applyParsedPaste(rec, col, parsed, quiet) {
-          if (!parsed || parsed.skip) return false;
-          if (parsed.formula != null) return this.writeCellFormula(rec, col, parsed.formula, quiet);
-          return this.writeIndependentValue(rec, col, parsed.value, quiet);
-        },
         pasteGrid(text) {
           if (this.view !== 'grid' || !this.currentTable) return;
           const grid = parseClipboardGrid(text);
@@ -4315,7 +4267,7 @@
               cells.forEach(({ rec, col }) => {
                 const parsed = this.coercePasteValue(col, grid[0][0]);
                 if (parsed.skip) { skip++; return; }
-                if (this.applyParsedPaste(rec, col, parsed, true)) n++;
+                if (this.setCell(rec, col, parsed.value, true)) n++;
                 else skip++;
               });
               this.toast(n ? ('Pasted into ' + n + ' cell' + (n === 1 ? '' : 's') + (skip ? ' · ' + skip + ' skipped' : '')) : 'Those cells could not be pasted into.', n ? undefined : 'warn');
@@ -4333,7 +4285,7 @@
               if (!col) { skip++; continue; }
               const parsed = this.coercePasteValue(col, grid[i][j]);
               if (parsed.skip) { skip++; continue; }
-              if (this.applyParsedPaste(rec, col, parsed, true)) n++;
+              if (this.setCell(rec, col, parsed.value, true)) n++;
               else skip++;
             }
           }
@@ -4376,7 +4328,7 @@
         },
         keysBlockedByUi() {
           if (this.docReaderOpen) return true;
-          return !!(this.needsSetup || this.pinOpen || this.colEditor.open || this.tableEditor.open || this.groupEditor.open || this.rowAudit.open || this.confirmDlg.open || this.settingsOpen || this.fieldsOpen || this.auditOpen);
+          return !!(this.needsSetup || this.pinOpen || this.colEditor.open || this.tableEditor.open || this.groupEditor.open || this.rowAudit.open || this.confirmDlg.open || this.settingsOpen || this.fieldsOpen || this.auditOpen || this.nameDlg.open);
         },
         emptyValueFor(col) {
           if (col.type === 'checkbox') return false;
@@ -4390,11 +4342,10 @@
           cells.forEach(({ rec, col }) => {
             if (rec.locked) { locked++; return; }
             if (this.isComputedCell(rec, col) || col.type === 'autonumber') { locked++; return; }
-            const hadFx = !!(cellFormulaExpr(rec, col) || (columnFormulaExpr(col) && !cellIgnoresColumnFormula(rec, col)));
             const empty = this.emptyValueFor(col);
             const cur = rawStored(rec, col);
-            if (!hadFx && (cur === empty || cur === '' || cur == null)) return;
-            this.writeIndependentValue(rec, col, empty, true);
+            if (cur === empty || cur === '' || cur == null) return;
+            this.setCell(rec, col, empty);
             cleared++;
           });
           if (!cleared && locked) this.toast('Those cells are calculated. Change the input they depend on, or use {This} if you want to type here.');
@@ -4513,16 +4464,6 @@
           else if (e.key === 'Enter' && this.selectedRecord && this.selectedCell.colId) {
             const col = findColumn(this.currentTable, this.selectedCell.colId);
             this.beginEdit(this.selectedRecord, col);
-            return;
-          } else if (e.key === 'F2') {
-            e.preventDefault();
-            this.formulaApply = 'cell';
-            this.startFormulaBar();
-            return;
-          } else if (e.key === '=') {
-            e.preventDefault();
-            this.formulaApply = 'cell';
-            this.startFormulaBar();
             return;
           } else return;
           e.preventDefault();
@@ -4825,24 +4766,22 @@
             store: rel, table: li, rec: li.records[1], stack: new Set()
           });
           if (sumRange.value !== 12) console.warn('SUM range failed', sumRange);
-          const totalCol = li.columns.find((c) => c.name === 'Line Total');
-          const first = li.records[0];
-          const colDefault = formatDisplay(rel, li, first, totalCol);
-          if (colDefault !== '$125.00') console.warn('column default Line Total failed', colDefault);
-          first.formulas = {};
-          first.formulas[totalCol.id] = '10+5';
-          const cellFx = formatDisplay(rel, li, first, totalCol);
-          if (cellFx !== '$15.00') console.warn('cell formula override failed', cellFx);
-          first.formulas = {};
-          first.formulaOff = {};
-          first.formulaOff[totalCol.id] = true;
-          first.data[totalCol.id] = 3;
-          const independent = formatDisplay(rel, li, first, totalCol);
-          if (independent !== '$3.00') console.warn('independent cell value failed', independent);
           if (!rel.groups || !rel.groups.length) console.warn('sample categories missing');
           if (rel.tables.some((t) => !t.groupId)) console.warn('sample sheet missing category');
           const clip = parseClipboardGrid('10\tHeat-treated\n4\tSame-day');
           if (clip.length !== 2 || clip[0][0] !== '10' || clip[1][1] !== 'Same-day') console.warn('clipboard grid parse failed', clip);
+          const named = sampleWorkspace('Named');
+          const padT = named.tables.find((t) => t.name === 'Search pad');
+          const findCol = padT.columns.find((c) => c.name === 'Find');
+          const hitCol = padT.columns.find((c) => c.name === 'Customer match');
+          const cust = named.tables.find((t) => t.name === 'Customers');
+          padT.records[0].data[findCol.id] = 'brond';
+          const hit = formatDisplay(named, padT, padT.records[0], hitCol);
+          if (String(hit).toLowerCase().indexOf('brondby') < 0) console.warn('named FILTER failed', hit);
+          const needle = String(displayNamedCell(named, 'FindCustomer') || '').toLowerCase();
+          if (needle !== 'brond') console.warn('named cell value failed', needle);
+          const shown = cust.records.filter((r) => String(formatDisplay(named, cust, r, cust.columns.find((c) => c.name === 'Name'))).toLowerCase().includes(needle));
+          if (shown.length !== 1) console.warn('named filter count failed', shown.length);
         },
         onPaste(e) {
           const target = e.target;
