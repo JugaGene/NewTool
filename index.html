@@ -1422,6 +1422,28 @@
       if (ci < 0 || ri < 0) return '';
       return colIndexToLetter(ci) + String(ri + 1);
     }
+    function shiftA1Token(token, dR, dC) {
+      const p = parseA1(token);
+      if (!p) return token;
+      const col = p.col + (dC || 0);
+      const row = p.row + (dR || 0);
+      if (col < 0 || row < 0) return token;
+      const body = colIndexToLetter(col) + String(row + 1);
+      return p.sheet ? p.sheet + '!' + body : body;
+    }
+    function shiftA1InText(text, dR, dC) {
+      if (!text || !(dR || dC)) return text;
+      return String(text).replace(/(?:[A-Za-z_][\w ]*!)?[A-Za-z]+\d+/g, (m) => parseA1(m) ? shiftA1Token(m, dR, dC) : m);
+    }
+    function snapshotCellRule(rec, col) {
+      return {
+        data: rec && rec.data ? rec.data[col.id] : null,
+        fx: cellFxOf(rec, col) || '',
+        ptr: cellPtrOf(rec, col) || '',
+        own: cellOwnOf(rec, col),
+        follow: !!(rec && rec.followCol && rec.followCol[col.id])
+      };
+    }
     function cellPtrOf(rec, col) {
       if (!rec || !col || !rec.ptr) return '';
       return String(rec.ptr[col.id] || '').trim();
@@ -3249,29 +3271,33 @@
           this.setCellFx(rec, col, expr);
           this.lookupFrom.open = false;
         },
-        setCellFx(rec, col, expr) {
-          if (rec.locked) return this.toast('This row is locked.');
+        setCellFx(rec, col, expr, quiet) {
+          if (rec.locked) { if (!quiet) this.toast('This row is locked.'); return false; }
           const e = String(expr || '').replace(/^=+/, '').trim();
-          if (!e) return;
+          if (!e) return false;
           if (rec.ptr) delete rec.ptr[col.id];
           if (rec.own) delete rec.own[col.id];
           if (!rec.fx) rec.fx = {};
           rec.fx[col.id] = e;
           if (rec.followCol) delete rec.followCol[col.id];
           rec.updatedAt = nowIso();
-          this.toast('This cell looks up using the cell above. The column rule is off here only.');
+          if (!quiet) this.toast('This cell looks up using the cell above. The column rule is off here only.');
+          return true;
         },
-        setCellOwn(rec, col) {
-          if (!rec || !col) return;
-          if (rec.locked) return this.toast('This row is locked.');
+        setCellOwn(rec, col, quiet) {
+          if (!rec || !col) return false;
+          if (rec.locked) { if (!quiet) this.toast('This row is locked.'); return false; }
           if (rec.ptr) delete rec.ptr[col.id];
           if (rec.fx) delete rec.fx[col.id];
           if (!rec.own) rec.own = {};
           rec.own[col.id] = true;
           if (rec.followCol) delete rec.followCol[col.id];
           rec.updatedAt = nowIso();
-          this.toast('This cell is typed. The column rule is off here only.');
-          this.beginEdit(rec, col);
+          if (!quiet) {
+            this.toast('This cell is typed. The column rule is off here only.');
+            this.beginEdit(rec, col);
+          }
+          return true;
         },
         useColumnRule(rec, col) {
           if (!rec || !col) return;
@@ -3302,18 +3328,19 @@
           const addr = a1Of(t, srcRec, srcCol);
           this.setCellPtr(destRec, destCol, addr);
         },
-        setCellPtr(rec, col, addr) {
-          if (rec.locked) return this.toast('This row is locked.');
+        setCellPtr(rec, col, addr, quiet) {
+          if (rec.locked) { if (!quiet) this.toast('This row is locked.'); return false; }
           if (!rec.ptr) rec.ptr = {};
           const p = String(addr || '').replace(/^=+/, '').trim();
-          if (!p) { delete rec.ptr[col.id]; return; }
-          if (!parseA1(p)) return this.toast('Use an address like B2 or Customers!B2.', 'warn');
+          if (!p) { delete rec.ptr[col.id]; return true; }
+          if (!parseA1(p)) { if (!quiet) this.toast('Use an address like B2 or Customers!B2.', 'warn'); return false; }
           rec.ptr[col.id] = p.toUpperCase().replace(/!/, '!');
           if (rec.fx) delete rec.fx[col.id];
           if (rec.own) delete rec.own[col.id];
           if (rec.followCol) delete rec.followCol[col.id];
           rec.updatedAt = nowIso();
-          this.toast('This cell follows ' + rec.ptr[col.id] + '. Other rows in this column stay as they are.');
+          if (!quiet) this.toast('This cell follows ' + rec.ptr[col.id] + '. Other rows in this column stay as they are.');
+          return true;
         },
         clearCellPtr(rec, col) {
           if (rec && rec.ptr) delete rec.ptr[col.id];
@@ -3901,6 +3928,7 @@
             if (src.fx) rec.fx = clone(src.fx);
             if (src.ptr) rec.ptr = clone(src.ptr);
             if (src.own) rec.own = clone(src.own);
+            if (src.followCol) rec.followCol = clone(src.followCol);
             t.columns.forEach((col) => {
               if (col.type === 'autonumber') {
                 col.seq = (col.seq || 0) + 1;
@@ -3915,6 +3943,12 @@
           const last = recs[recs.length - 1];
           let at = t.records.findIndex((r) => r.id === last.id) + 1;
           if (at < 1) at = t.records.length;
+          const srcIdx = recs.map((r) => t.records.findIndex((x) => x.id === r.id));
+          clones.forEach((rec, i) => {
+            const dR = at + i - srcIdx[i];
+            if (rec.fx) Object.keys(rec.fx).forEach((k) => { rec.fx[k] = shiftA1InText(rec.fx[k], dR, 0); });
+            if (rec.ptr) Object.keys(rec.ptr).forEach((k) => { rec.ptr[k] = shiftA1InText(rec.ptr[k], dR, 0); });
+          });
           t.records.splice(at, 0, ...clones);
           const cols = this.visibleColumns;
           if (cols.length) {
@@ -3925,6 +3959,7 @@
           this.toast(clones.length === 1 ? 'Row duplicated.' : clones.length + ' rows duplicated.');
         },
         fillDownSelection() {
+          const t = this.currentTable;
           const rows = this.filteredRecords;
           const cols = this.visibleColumns;
           const cells = this.selectedCellEntries();
@@ -3935,15 +3970,16 @@
           cols.forEach((c) => { if (cells.some((x) => x.col.id === c.id)) colIds.push(c.id); });
           if (recIds.length < 2) return this.toast('Fill down needs more than one row in the selection.', 'warn');
           const top = rows.find((r) => r.id === recIds[0]);
+          const topI = t.records.findIndex((r) => r.id === top.id);
           let n = 0, skip = 0;
           colIds.forEach((cid) => {
             const col = cols.find((c) => c.id === cid);
-            const parsed = this.coercePasteValue(col, this.displayValue(top, col));
+            const spec = snapshotCellRule(top, col);
             recIds.slice(1).forEach((rid) => {
               const rec = rows.find((r) => r.id === rid);
               if (!rec || !col) return;
-              if (parsed.skip) { skip++; return; }
-              if (this.setCell(rec, col, parsed.value, true)) n++;
+              const destI = t.records.findIndex((r) => r.id === rec.id);
+              if (this.applyCellRule(rec, col, spec, destI - topI, 0, true)) n++;
               else skip++;
             });
           });
@@ -4218,6 +4254,96 @@
           if (payload.record && payload.record.fx) delete payload.record.fx[payload.column.id];
           this.setCell(payload.record, payload.column, v);
         },
+        applyCellRule(rec, col, spec, dR, dC, quiet) {
+          if (!rec || !col || rec.locked) return false;
+          if (col.type === 'autonumber' || col.type === 'attachment' || col.type === 'rollup') return false;
+          const fx = shiftA1InText(spec && spec.fx, dR, dC);
+          const ptr = shiftA1InText(spec && spec.ptr, dR, dC);
+          if (fx) return this.setCellFx(rec, col, fx, true);
+          if (ptr) return this.setCellPtr(rec, col, ptr, true);
+          if (spec && spec.follow) {
+            if (rec.ptr) delete rec.ptr[col.id];
+            if (rec.fx) delete rec.fx[col.id];
+            if (rec.own) delete rec.own[col.id];
+            if (rec.rowOwn) {
+              if (!rec.followCol) rec.followCol = {};
+              rec.followCol[col.id] = true;
+            }
+            rec.updatedAt = nowIso();
+            return true;
+          }
+          if (spec && spec.own) {
+            rec.data[col.id] = spec.data;
+            return this.setCellOwn(rec, col, true);
+          }
+          return this.setCell(rec, col, spec ? spec.data : null, true);
+        },
+        captureClip() {
+          const t = this.currentTable;
+          const rows = this.filteredRecords;
+          const cols = this.visibleColumns;
+          const cells = this.selectedCellEntries();
+          if (!t || !cells.length) return null;
+          const recIds = [];
+          rows.forEach((r) => { if (cells.some((c) => c.rec.id === r.id)) recIds.push(r.id); });
+          const colIds = [];
+          cols.forEach((c) => { if (cells.some((x) => x.col.id === c.id)) colIds.push(c.id); });
+          const recs = recIds.map((id) => rows.find((r) => r.id === id));
+          const ccols = colIds.map((id) => cols.find((c) => c.id === id));
+          const originRec = t.records.findIndex((r) => r.id === recs[0].id);
+          const originCol = t.columns.findIndex((c) => c.id === ccols[0].id);
+          const wholeRows = this.selectMode === 'rows' || (ccols.length === cols.length && recs.length);
+          const wholeCols = this.selectMode === 'cols';
+          return {
+            v: 1,
+            kind: 'forgegrid-cells',
+            tableId: t.id,
+            selectMode: this.selectMode,
+            origin: { row: originRec, col: originCol },
+            wholeRows: !!wholeRows && ccols.length === t.columns.filter((c) => !c.hidden).length,
+            rowOwn: recs.map((r) => !!r.rowOwn),
+            grid: recs.map((rec) => ccols.map((col) => snapshotCellRule(rec, col))),
+            columns: wholeCols ? ccols.map((c) => ({
+              name: c.name,
+              type: c.type,
+              formula: c.formula ? clone(c.formula) : null,
+              lookup: c.lookup ? clone(c.lookup) : null,
+              link: c.link ? clone(c.link) : null,
+              rollup: c.rollup ? clone(c.rollup) : null
+            })) : null
+          };
+        },
+        pasteClipPayload(payload, r0, c0, destRecs, destCols) {
+          const t = this.currentTable;
+          let n = 0, skip = 0;
+          if (payload.columns && payload.selectMode === 'cols' && this.selectMode === 'cols' && this.mode === 'architect') {
+            payload.columns.forEach((src, j) => {
+              const col = destCols[j];
+              if (!col || !src) { skip++; return; }
+              if (src.formula) col.formula = clone(src.formula);
+              if (src.lookup) col.lookup = clone(src.lookup);
+              if (src.link) col.link = clone(src.link);
+              if (src.rollup) col.rollup = clone(src.rollup);
+              n++;
+            });
+          }
+          payload.grid.forEach((row, i) => {
+            const rec = destRecs[i];
+            if (!rec) { skip += row.length; return; }
+            if (payload.wholeRows && payload.rowOwn[i]) rec.rowOwn = true;
+            const srcRi = payload.origin.row + i;
+            const destRi = t.records.findIndex((r) => r.id === rec.id);
+            row.forEach((spec, j) => {
+              const col = destCols[j];
+              if (!col || !spec) { skip++; return; }
+              const srcCi = payload.origin.col + j;
+              const destCi = t.columns.findIndex((c) => c.id === col.id);
+              if (this.applyCellRule(rec, col, spec, destRi - srcRi, destCi - srcCi, true)) n++;
+              else skip++;
+            });
+          });
+          return { n, skip };
+        },
         setCell(rec, col, value, quiet) {
           const t = this.currentTable;
           if (rec.locked) { if (!quiet) this.toast('This row is locked. Uncheck the lock to edit.'); return false; }
@@ -4435,10 +4561,11 @@
           const recIds = new Set(cells.map((c) => c.rec.id));
           const colIds = new Set(cells.map((c) => c.col.id));
           this._clipText = tsv;
+          this._clipPayload = this.captureClip();
           const write = navigator.clipboard && navigator.clipboard.writeText
             ? navigator.clipboard.writeText(tsv)
             : Promise.reject();
-          write.then(() => this.toast('Copied ' + recIds.size + '×' + colIds.size + ' cells.')).catch(() => this.toast('Copied locally. If the system clipboard is blocked, paste still works in this tab.'));
+          write.then(() => this.toast('Copied ' + recIds.size + '×' + colIds.size + ' cells (values and rules).')).catch(() => this.toast('Copied locally. If the system clipboard is blocked, paste still works in this tab.'));
         },
         onCopy(e) {
           if (this.typingInField(e.target) || this.keysBlockedByUi() || this.editing.recId) return;
@@ -4447,9 +4574,11 @@
           if (!tsv) return;
           e.preventDefault();
           e.clipboardData.setData('text/plain', tsv);
+          try { e.clipboardData.setData('application/json', JSON.stringify(this.captureClip())); } catch (err) { /* ignore */ }
           this._clipText = tsv;
+          this._clipPayload = this.captureClip();
           const cells = this.selectedCellEntries();
-          this.toast('Copied ' + new Set(cells.map((c) => c.rec.id)).size + '×' + new Set(cells.map((c) => c.col.id)).size + ' cells.');
+          this.toast('Copied ' + new Set(cells.map((c) => c.rec.id)).size + '×' + new Set(cells.map((c) => c.col.id)).size + ' cells (values and rules).');
         },
         async pasteFromClipboard() {
           let text = '';
@@ -4457,12 +4586,12 @@
             if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText();
           } catch (err) { text = ''; }
           if (!text) text = this._clipText || '';
-          if (!text) return this.toast('Nothing to paste.', 'warn');
+          if (!text && !this._clipPayload) return this.toast('Nothing to paste.', 'warn');
           this.pasteGrid(text);
         },
         coercePasteValue(col, raw) {
           const s = String(raw == null ? '' : raw).trim();
-          if (this.isComputed(col) || col.type === 'autonumber' || col.type === 'attachment') return { skip: true };
+          if (col.type === 'autonumber' || col.type === 'attachment' || col.type === 'rollup') return { skip: true };
           if (s === '') return { value: col.type === 'checkbox' ? false : null };
           if (col.type === 'checkbox') return { value: /^(yes|true|1|x|✓|checked)$/i.test(s) };
           if (['number', 'currency', 'percent'].includes(col.type)) {
@@ -4494,38 +4623,65 @@
         },
         pasteGrid(text) {
           if (this.view !== 'grid' || !this.currentTable) return;
-          const grid = parseClipboardGrid(text);
-          if (!grid.length) return;
           const rows = this.filteredRecords;
           const cols = this.visibleColumns;
           if (!rows.length || !cols.length) return this.toast('Nothing to paste into.', 'warn');
           const cells = this.selectedCellEntries();
           let r0 = rows.findIndex((r) => r.id === (this.selectedCell && this.selectedCell.recId));
           let c0 = cols.findIndex((c) => c.id === (this.selectedCell && this.selectedCell.colId));
+          const recIds = [];
+          const colIds = [];
           if (cells.length) {
-            const recIds = [];
             rows.forEach((r) => { if (cells.some((c) => c.rec.id === r.id)) recIds.push(r.id); });
-            const colIds = [];
             cols.forEach((c) => { if (cells.some((x) => x.col.id === c.id)) colIds.push(c.id); });
             r0 = rows.findIndex((r) => r.id === recIds[0]);
             c0 = cols.findIndex((c) => c.id === colIds[0]);
-            const srcR = grid.length;
-            const srcC = Math.max.apply(null, grid.map((row) => row.length));
-            const one = srcR === 1 && srcC === 1;
-            if (one && recIds.length * colIds.length > 1) {
-              let n = 0, skip = 0;
-              cells.forEach(({ rec, col }) => {
-                const parsed = this.coercePasteValue(col, grid[0][0]);
-                if (parsed.skip) { skip++; return; }
-                if (this.setCell(rec, col, parsed.value, true)) n++;
-                else skip++;
-              });
-              this.toast(n ? ('Pasted into ' + n + ' cell' + (n === 1 ? '' : 's') + (skip ? ' · ' + skip + ' skipped' : '')) : 'Those cells could not be pasted into.', n ? undefined : 'warn');
-              return;
-            }
           }
           if (r0 < 0) r0 = 0;
           if (c0 < 0) c0 = 0;
+          const payload = (this._clipPayload && this._clipPayload.kind === 'forgegrid-cells' && (!text || text === this._clipText))
+            ? this._clipPayload
+            : null;
+          if (payload && payload.grid && payload.grid.length) {
+            const srcR = payload.grid.length;
+            const srcC = payload.grid[0].length;
+            const one = srcR === 1 && srcC === 1;
+            if (one && recIds.length * colIds.length > 1) {
+              const t = this.currentTable;
+              const srcRi = payload.origin.row;
+              const srcCi = payload.origin.col;
+              let n = 0, skip = 0;
+              cells.forEach(({ rec, col }) => {
+                const destRi = t.records.findIndex((r) => r.id === rec.id);
+                const destCi = t.columns.findIndex((c) => c.id === col.id);
+                if (this.applyCellRule(rec, col, payload.grid[0][0], destRi - srcRi, destCi - srcCi, true)) n++;
+                else skip++;
+              });
+              this.toast(n ? ('Pasted rules into ' + n + ' cell' + (n === 1 ? '' : 's') + (skip ? ' · ' + skip + ' skipped' : '')) : 'Those cells could not be pasted into.', n ? undefined : 'warn');
+              return;
+            }
+            const destRecs = payload.grid.map((_, i) => rows[r0 + i]);
+            const destCols = payload.grid[0].map((_, j) => cols[c0 + j]);
+            const { n, skip } = this.pasteClipPayload(payload, r0, c0, destRecs, destCols);
+            this.toast(n ? ('Pasted ' + n + ' cell' + (n === 1 ? '' : 's') + ' with rules' + (skip ? ' · ' + skip + ' skipped' : '')) : 'Nothing was pasted.', n ? undefined : 'warn');
+            return;
+          }
+          const grid = parseClipboardGrid(text);
+          if (!grid.length) return;
+          const srcR = grid.length;
+          const srcC = Math.max.apply(null, grid.map((row) => row.length));
+          const one = srcR === 1 && srcC === 1;
+          if (one && recIds.length * colIds.length > 1) {
+            let n = 0, skip = 0;
+            cells.forEach(({ rec, col }) => {
+              const parsed = this.coercePasteValue(col, grid[0][0]);
+              if (parsed.skip) { skip++; return; }
+              if (this.setCell(rec, col, parsed.value, true)) n++;
+              else skip++;
+            });
+            this.toast(n ? ('Pasted into ' + n + ' cell' + (n === 1 ? '' : 's') + (skip ? ' · ' + skip + ' skipped' : '')) : 'Those cells could not be pasted into.', n ? undefined : 'warn');
+            return;
+          }
           let n = 0, skip = 0;
           for (let i = 0; i < grid.length; i++) {
             const rec = rows[r0 + i];
@@ -4545,8 +4701,18 @@
           const t = this.currentTable;
           const tsv = t.columns.map((c) => this.displayValue(rec, c)).join('\t');
           this._clipText = tsv;
+          const prev = this.selectMode;
+          const prevA = this.selectionAnchor;
+          const prevF = this.selectionFocus;
+          this.selectMode = 'rows';
+          const vis = this.visibleColumns;
+          if (vis.length) this.applySelection({ recId: rec.id, colId: vis[0].id }, { recId: rec.id, colId: vis[vis.length - 1].id });
+          this._clipPayload = this.captureClip();
+          this.selectMode = prev;
+          this.selectionAnchor = prevA;
+          this.selectionFocus = prevF;
           const write = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(tsv) : Promise.reject();
-          write.then(() => this.toast('Row copied as TSV.')).catch(() => this.toast('Row copied locally.'));
+          write.then(() => this.toast('Row copied (values and rules).')).catch(() => this.toast('Row copied locally.'));
         },
         saveForm(andNew) {
           const t = this.currentTable; const rec = this.formRecord;
@@ -4591,10 +4757,14 @@
           let cleared = 0, locked = 0;
           cells.forEach(({ rec, col }) => {
             if (rec.locked) { locked++; return; }
-            if (this.isComputedCell(rec, col) || col.type === 'autonumber') { locked++; return; }
+            if (col.type === 'autonumber' || col.type === 'rollup') { locked++; return; }
             const empty = this.emptyValueFor(col);
+            if (rec.ptr) delete rec.ptr[col.id];
+            if (rec.fx) delete rec.fx[col.id];
+            if (rec.own) delete rec.own[col.id];
+            if (rec.followCol) delete rec.followCol[col.id];
             const cur = rawStored(rec, col);
-            if (cur === empty || cur === '' || cur == null) return;
+            if (cur === empty || cur === '' || cur == null) { cleared++; return; }
             this.setCell(rec, col, empty);
             cleared++;
           });
@@ -5024,6 +5194,8 @@
           if (sumRange.value !== 12) console.warn('SUM range failed', sumRange);
           if (!rel.groups || !rel.groups.length) console.warn('sample categories missing');
           if (rel.tables.some((t) => !t.groupId)) console.warn('sample sheet missing category');
+          if (shiftA1Token('B2', 1, 0) !== 'B3') console.warn('shift A1 failed');
+          if (shiftA1InText('XLOOKUP(C1, "Products", "Item No", "Name")', 1, 0) !== 'XLOOKUP(C2, "Products", "Item No", "Name")') console.warn('shift formula A1 failed');
           const clip = parseClipboardGrid('10\tHeat-treated\n4\tSame-day');
           if (clip.length !== 2 || clip[0][0] !== '10' || clip[1][1] !== 'Same-day') console.warn('clipboard grid parse failed', clip);
           const ws = sampleWorkspace('Ptr');
@@ -5059,7 +5231,14 @@
           const ownTot = formatDisplay(free, li2, li2.records[0], tot2);
           if (String(ownTot).indexOf('7') < 0) console.warn('row own rules failed', ownTot, colTot);
           if (formatDisplay(free, li2, li2.records[1], tot2) === ownTot && colTot !== ownTot) { /* other row still column */ }
-          else if (li2.records[1] && formatDisplay(free, li2, li2.records[1], tot2) === colTot) { /* ok */ }
+            else if (li2.records[1] && formatDisplay(free, li2, li2.records[1], tot2) === colTot) { /* ok */ }
+          const copySrc = { data: {}, fx: { [tot2.id]: 'XLOOKUP(C1, "Products", "Item No", "Name")' } };
+          const spec = snapshotCellRule(copySrc, tot2);
+          const dest = li2.records[2] || li2.records[1];
+          dest.fx = {};
+          const shifted = shiftA1InText(spec.fx, 1, 0);
+          dest.fx[tot2.id] = shifted;
+          if (shifted.indexOf('C2') < 0) console.warn('copied rule did not shift', shifted);
         },
         onPaste(e) {
           const target = e.target;
