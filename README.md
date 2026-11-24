@@ -27,12 +27,8 @@ You start in **Operator Mode**. Structure is locked. Switch to **Architect Mode*
 ## What to try
 
 - **Orders** and **Line Items** — customer and product lookups, a `{Qty} * {Unit Price}` formula, and rollups for line count and order total.
-- **Cells work like Excel.** Click a cell and type. A date (`24/11/2026`) is a date even if the column is a formula. Type `=A1` (or `=B2+1`) and that cell uses the other cell as a reference. Empty cells still follow the **column** formula; the moment you type, **this cell** is yours. Other rows are unchanged.
-- **+ Row** — new empty cells. Column formulas fill them until you type over them.
-- **own rules** (next to + Row) — skip column formulas from the start.
-- **Set type / rule for this cell** — same panel as **New column**, if you want a lookup or type without typing `=`. **Use column type again** puts the column back.
-- **Copy / paste / duplicate / fill down** — copies the **rules** as well as the text (cell formulas, look-at-cell pointers, own-rule rows, and column formulas when you copy a whole column and paste onto another in Architect Mode). Addresses like `A1` shift the same way Excel does. Plain text from Excel still pastes as values.
-- **Look at the cell above / look this up using the cell above** — shortcuts for one cell. Column rules stay the default for every other row.
+- **Set type / rule for this cell** — right-click a cell. Opens the **same panel as New column**. Type is the rule (date, lookup, formula…). It applies to that cell only; the column stays the default for other rows. **Use column type again** puts it back.
+- **Copy / paste / duplicate / fill down** — copies the cell **rule** as well as the text. Formula addresses like `A1` shift. Column formulas copy when you copy a whole column (Architect). Plain text from Excel still pastes as values.
 - **Search & link** — a column type with a search button, a dropdown, and type-ahead. Architects point it at another sheet, choose the field to show, and search either **one column** or the **whole row**. Type `br` and **Brondby IF** appears as soon as it matches (sample Customers includes that name). Arrow keys move the highlight; Enter picks it. Lookup / pick links use the same dropdown. If this browser already has an older workspace, Architect → Backup → Workspace settings → **Replace with sample workspace** to load that demo.
 - **XLOOKUP links** — on a **Lookup / link** column, choose **XLOOKUP — match a typed key**. Type a value in this column or another (for example Item No `1`). ForgeGrid finds the related row where that column equals `1` and fills the link plus connected fields (autofill price, live **Linked field** columns). Misses can stay blank or show `#N/A`. Sample Line Items: type `1` → Widget A, Hardware, $12.50.
 - **XLOOKUP formula** — `XLOOKUP({Item No}, "Products", "Item No", "Unit Price")`.
