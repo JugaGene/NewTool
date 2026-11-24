@@ -65,6 +65,9 @@
     .ctx-menu .kbd { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; color: #8ea0be; }
     .ctx-menu .danger { color: #fca5a5; }
     .ctx-sep { height: 1px; background: #223250; margin: 4px 0; }
+    .data-grid td.named-cell { box-shadow: inset 0 0 0 1px rgba(245,185,66,.45); }
+    .name-chip { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; color: #f5b942; background: rgba(245,185,66,.12); border-radius: 3px; padding: 0 4px; line-height: 14px; flex-shrink: 0; margin-top: 2px; }
+    .cell-name-box { width: 132px; height: 26px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; }
     .data-grid td.locked { color: #8ea0be; }
     .data-grid td.changed { box-shadow: inset 3px 0 0 #f5b942; }
     .data-grid tr.row-locked td { background: rgba(245, 185, 66, 0.04); }
@@ -155,7 +158,7 @@
             <input v-model="setup.sample" type="checkbox" class="mt-1 accent-teal" />
             <span>
               <strong class="text-white">Load sample operations workspace</strong>
-              <span class="block text-mute">An Operations category with Customers, Products, Orders, and Line Items — XLOOKUP, formulas, and row-above totals. Add more categories yourself.</span>
+              <span class="block text-mute">Operations with a Search pad (named cell FindCustomer), Customers that filter from it, Products, Orders, and Line Items.</span>
             </span>
           </label>
           <button @click="completeSetup" class="w-full rounded-lg bg-teal text-ink-900 font-semibold py-2.5 hover:brightness-110">
@@ -402,6 +405,14 @@
                 <span class="text-[11px] text-mute shrink-0 hidden sm:inline">{{ kindLabel(currentTable.kind) }}</span>
               </button>
               <span class="text-xs text-mute truncate hidden xl:inline flex-1 min-w-0">{{ currentTable.description }}</span>
+              <label class="hidden sm:flex items-center gap-1 text-[11px] text-mute shrink-0" title="Name this cell (Excel-style). Other cells can point at it with {@Name}.">
+                <span>Name</span>
+                <input class="cell-name-box rounded-md bg-ink-900 border border-line px-2 outline-none focus:border-gold text-mist"
+                  :value="selectedCellName"
+                  :placeholder="selectedCell.colId ? 'e.g. FindCustomer' : ''"
+                  :disabled="!selectedCell.colId"
+                  @change="onNameBoxChange($event.target.value)" />
+              </label>
               <div class="ml-auto flex flex-wrap items-center gap-1">
                 <div class="rounded-lg border border-line overflow-hidden text-[11px] font-medium">
                   <button class="px-2 py-1" :class="view==='grid' ? 'bg-ink-700' : 'text-mute'" @click="view='grid'">Grid</button>
@@ -509,7 +520,7 @@
                     </td>
                     <td v-for="col in visibleColumns" :key="col.id"
                       class="px-0 align-top"
-                      :class="[isComputedCell(rec, col) && 'locked', cellChange(rec, col) && 'changed', isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
+                      :class="[isComputedCell(rec, col) && 'locked', cellChange(rec, col) && 'changed', cellName(rec, col) && 'named-cell', isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
                       @mousedown.stop="onCellMouseDown($event, rec, col)"
                       @mouseenter="onCellMouseEnter(rec, col)"
                       @contextmenu.prevent="openCtxMenu($event, 'cell', rec, col)">
@@ -526,6 +537,7 @@
                             <cell-view :text="displayValue(rec, col)" :column="col" :raw="rawValue(rec, col)" />
                           </div>
                         </div>
+                        <span v-if="cellName(rec, col)" class="name-chip" :title="'Named {@' + cellName(rec, col) + '} — other cells can point here'">@{{ cellName(rec, col) }}</span>
                       </div>
                     </td>
                   </tr>
@@ -591,6 +603,9 @@
 
             <footer class="min-h-8 shrink-0 border-t border-line px-3 py-1 flex flex-wrap items-center text-[11px] text-mute gap-x-4 gap-y-1">
               <span>{{ filteredRecords.length }} shown · {{ currentTable.records.length }} total<span v-if="hiddenColumnCount"> · {{ hiddenColumnCount }} hidden column{{ hiddenColumnCount===1 ? '' : 's' }}</span><span v-if="hiddenRowCount"> · {{ hiddenRowCount }} hidden row{{ hiddenRowCount===1 ? '' : 's' }}</span></span>
+              <button v-if="currentTable.rowFilter && currentTable.rowFilter.name" type="button" class="text-[11px] rounded-md px-2 py-0.5 border border-gold/40 text-gold hover:bg-gold/10" :title="'Live filter from named cell'" @click="openFilterDlg">
+                Filter {{ columnName(currentTable.rowFilter.columnId) }} {{ currentTable.rowFilter.mode==='equals' ? '=' : 'contains' }} @{{ currentTable.rowFilter.name }}
+              </button>
               <span v-if="sort.colId">Sorted by {{ columnName(sort.colId) }}</span>
               <span v-if="selectionStats" class="text-mist">
                 <template v-if="selectionStats.numeric">Sum {{ selectionStats.sumLabel }} · Avg {{ selectionStats.avgLabel }} · </template>{{ selectionStats.count }} selected
@@ -761,9 +776,15 @@
           </label>
           <div v-if="colEditor.draft.link.mode==='key'" class="grid md:grid-cols-2 gap-3">
             <label class="text-sm">Type the key in
-              <select v-model="colEditor.draft.link.keyColumnId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
+              <select v-model="colEditor.draft.link.keyColumnId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2" @change="colEditor.draft.link.keyName=''">
                 <option value="">This column</option>
                 <option v-for="c in keySourceColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
+              </select>
+            </label>
+            <label class="text-sm">Or a named cell (one value for the whole column)
+              <select v-model="colEditor.draft.link.keyName" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2" @change="onKeyNameChange">
+                <option value="">— none —</option>
+                <option v-for="n in namedCells" :key="n.id" :value="n.name">@{{ n.name }}</option>
               </select>
             </label>
             <label class="text-sm">Find that key on (related column)
@@ -806,7 +827,9 @@
             <span class="font-mono text-gold">{This[-1]}+1</span> increments it.
             Ranges: <span class="font-mono text-gold">SUM({Qty[-2:0]})</span> is Qty on this row and the two above.
             Dates are day/month/year: <span class="font-mono text-gold">01/01/2026+1</span> → <span class="font-mono text-gold">02/01/2026</span>.
-            The formula runs on every row in this column.
+            Point at a named cell with <span class="font-mono text-gold">{@FindCustomer}</span> (Excel name / coding variable).
+            <span class="font-mono text-gold">FILTER("Customers","Name",{@FindCustomer},"Name")</span> searches another sheet using that cell.
+            Column formulas still fill every row by default.
           </div>
           <textarea v-model="colEditor.draft.formula.expression" rows="3" class="w-full rounded-lg bg-ink-900 border border-line px-3 py-2 font-mono text-sm" placeholder="{This[-1]}+1"></textarea>
           <div class="flex flex-wrap gap-1">
@@ -814,6 +837,7 @@
             <button type="button" class="text-[11px] px-2 py-1 rounded bg-gold/20 text-gold hover:bg-gold/30" @click="insertFormulaText('{This[-1]}')">{ This[-1] } row above</button>
             <button type="button" class="text-[11px] px-2 py-1 rounded bg-gold/20 text-gold hover:bg-gold/30" @click="insertFormulaText('{This[-1]}+1')">{ This[-1] }+1</button>
             <button type="button" class="text-[11px] px-2 py-1 rounded bg-gold/20 text-gold hover:bg-gold/30" @click="insertFormulaText('ABOVE()+1')">ABOVE()+1</button>
+            <button v-for="n in namedCells" :key="n.id" type="button" class="text-[11px] px-2 py-1 rounded bg-gold/20 text-gold hover:bg-gold/30" @click="insertFormulaText('{@' + n.name + '}')">{@ {{ n.name }} }</button>
             <button v-for="c in formulaInsertable" :key="c.id" type="button" class="text-[11px] px-2 py-1 rounded bg-ink-700 hover:bg-ink-700/80" @click="insertFormulaRef(c.name)">{ {{ c.name }} }</button>
           </div>
           <div class="flex flex-wrap items-end gap-2 pt-1">
@@ -990,6 +1014,38 @@
               </tr>
             </tbody>
           </table>
+        </div>
+      </modal-frame>
+
+      <!-- Name / filter cell -->
+      <modal-frame v-if="nameDlg.open" :title="nameDlg.mode==='filter' ? 'Filter this sheet from a named cell' : 'Name this cell'" @close="nameDlg.open=false">
+        <p class="text-sm text-mute mb-3">{{ nameDlg.mode==='filter' ? 'Rows stay visible only when this column matches the named cell. Empty named cell shows every row. This is the Excel filter + coding parameter mix.' : 'Give this cell a name, like a variable. Other cells and sheets can point to it with {@Name} or FILTER.' }}</p>
+        <label v-if="nameDlg.mode==='name'" class="block text-sm mb-3">Name
+          <input v-model.trim="nameDlg.text" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2 font-mono" placeholder="FindCustomer" />
+        </label>
+        <template v-else>
+          <label class="block text-sm mb-3">Named cell
+            <select v-model="nameDlg.text" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
+              <option value="">Select…</option>
+              <option v-for="n in namedCells" :key="n.id" :value="n.name">@{{ n.name }}</option>
+            </select>
+          </label>
+          <label class="block text-sm mb-3">Match column on this sheet
+            <select v-model="nameDlg.columnId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
+              <option v-for="c in visibleColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </label>
+          <label class="block text-sm mb-3">Match
+            <select v-model="nameDlg.match" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
+              <option value="contains">Contains</option>
+              <option value="equals">Equals</option>
+            </select>
+          </label>
+        </template>
+        <div class="flex justify-end gap-2">
+          <button class="px-3 py-1.5 text-sm" @click="nameDlg.open=false">Cancel</button>
+          <button v-if="nameDlg.mode==='filter' && currentTable && currentTable.rowFilter" class="px-3 py-1.5 text-sm" @click="clearSheetFilter">Clear filter</button>
+          <button class="px-3 py-1.5 text-sm rounded-lg bg-gold text-ink-900 font-semibold" @click="saveNameDlg">{{ nameDlg.mode==='filter' ? 'Apply filter' : 'Save name' }}</button>
         </div>
       </modal-frame>
 
@@ -1269,6 +1325,7 @@
         settings: { orgName: '', pinHash: '' },
         groups: [],
         tables: [],
+        names: [],
         audit: []
       };
     }
@@ -1278,6 +1335,7 @@
       if (!Array.isArray(store.groups)) store.groups = [];
       if (!Array.isArray(store.tables)) store.tables = [];
       if (!Array.isArray(store.audit)) store.audit = [];
+      if (!Array.isArray(store.names)) store.names = [];
       if (!store.settings) store.settings = { orgName: '', pinHash: '' };
       if (!store.groups.length && store.tables.length) {
         store.groups.push({ id: 'grp_default', name: 'Sheets', collapsed: false, kind: 'program', color: 'teal' });
@@ -1295,11 +1353,13 @@
         if (!t.kind) t.kind = (g && g.kind) || 'program';
         if (!t.color) t.color = 'teal';
         if (t.rowHeadWidth == null || t.rowHeadWidth < 40) t.rowHeadWidth = 52;
+        if (t.rowFilter && !t.rowFilter.name) t.rowFilter = null;
         (t.columns || []).forEach((c) => {
           if (c.width == null) c.width = 160;
           if (c.type === 'search' && c.link) {
             if (!c.link.searchScope) c.link.searchScope = 'row';
             if (c.link.searchColumnId == null) c.link.searchColumnId = c.link.displayColumnId || '';
+            if (c.link.keyName == null) c.link.keyName = '';
           }
         });
         (t.records || []).forEach((r) => {
@@ -1329,6 +1389,41 @@
     function colByName(table, name) {
       const n = String(name || '').trim().toLowerCase();
       return table.columns.find((c) => c.name.toLowerCase() === n);
+    }
+    function namedCellDef(store, name) {
+      const n = String(name || '').replace(/^@/, '').trim().toLowerCase();
+      if (!n || !store || !Array.isArray(store.names)) return null;
+      return store.names.find((x) => String(x.name || '').toLowerCase() === n) || null;
+    }
+    function namedCellValue(store, name, stack) {
+      const def = namedCellDef(store, name);
+      if (!def) throw new Error('Unknown name ' + name);
+      const t = findTable(store, def.tableId);
+      const rec = t && t.records.find((r) => r.id === def.recId);
+      const col = t && findColumn(t, def.colId);
+      if (!t || !rec || !col) return '';
+      stack = stack || new Set();
+      const key = 'name:' + def.id;
+      if (stack.has(key)) return '#CYCLE!';
+      stack.add(key);
+      return valueOf(store, t, rec, col, stack);
+    }
+    function displayNamedCell(store, name) {
+      const def = namedCellDef(store, name);
+      if (!def) return '';
+      const t = findTable(store, def.tableId);
+      const rec = t && t.records.find((r) => r.id === def.recId);
+      const col = t && findColumn(t, def.colId);
+      if (!t || !rec || !col) return '';
+      return formatDisplay(store, t, rec, col);
+    }
+    function cellNameOf(store, rec, col) {
+      if (!store || !rec || !col) return '';
+      const hit = (store.names || []).find((n) => n.recId === rec.id && n.colId === col.id);
+      return hit ? hit.name : '';
+    }
+    function validCellName(s) {
+      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(s || '').trim());
     }
 
     /* ---------------- dates (Excel-style, day/month/year) ---------------- */
@@ -1642,6 +1737,14 @@
           return d.getUTCDate();
         }
         if (f === 'XLOOKUP') return formulaXlookup(ctx, args);
+        if (f === 'REF' || f === 'NAME') {
+          if (!ctx || !ctx.store) throw new Error('REF needs a workspace');
+          return namedCellValue(ctx.store, String(args[0] ?? ''), ctx.stack);
+        }
+        if (f === 'FILTER') {
+          if (!ctx || !ctx.store) throw new Error('FILTER needs a workspace');
+          return formulaFilter(ctx, args);
+        }
         if (f === 'ROW') {
           if (!ctx || !ctx.table || !ctx.rec) throw new Error('ROW needs a row');
           return rowIndex(ctx.table, ctx.rec) + 1;
@@ -1720,7 +1823,9 @@
       if (!isLinkCol(col)) return rawStored(rec, col);
       if (col.link.mode === 'key') {
         let key = null;
-        if (col.link.keyColumnId) {
+        if (col.link.keyName) {
+          try { key = namedCellValue(store, col.link.keyName, new Set()); } catch (e) { key = null; }
+        } else if (col.link.keyColumnId) {
           const keyCol = findColumn(table, col.link.keyColumnId);
           key = keyCol ? rawStored(rec, keyCol) : null;
         } else {
@@ -1733,6 +1838,27 @@
         return found ? found.id : null;
       }
       return rawStored(rec, col);
+    }
+
+    function formulaFilter(ctx, args) {
+      const tableName = String(args[0] ?? '');
+      const matchName = String(args[1] ?? '');
+      const query = args[2];
+      const returnName = args.length > 3 ? String(args[3] ?? '') : matchName;
+      if (query == null || query === '') return '';
+      const table = ctx.store.tables.find((t) => t.name.toLowerCase() === tableName.toLowerCase());
+      if (!table) throw new Error('Unknown table ' + tableName);
+      const matchCol = colByName(table, matchName);
+      const retCol = colByName(table, returnName);
+      if (!matchCol) throw new Error('Unknown match column ' + matchName);
+      if (!retCol) throw new Error('Unknown return column ' + returnName);
+      const q = String(query).trim().toLowerCase();
+      const hits = table.records.map((r) => {
+        const shown = String(formatDisplay(ctx.store, table, r, matchCol) || '').toLowerCase();
+        return shown.includes(q) ? valueOf(ctx.store, table, r, retCol, ctx.stack) : null;
+      }).filter((x) => x !== null && x !== '');
+      if (!hits.length) return '';
+      return hits.length === 1 ? hits[0] : hits;
     }
 
     function formulaXlookup(ctx, args) {
@@ -1846,6 +1972,10 @@
       const rawName = parsed.name;
       let col = null;
       const isThis = /^(this|self|value)$/i.test(rawName);
+      const named = rawName.charAt(0) === '@' || (!colByName(table, rawName) && namedCellDef(store, rawName));
+      if (named && parsed.offStart == null) {
+        return namedCellValue(store, rawName, stack);
+      }
       if (isThis) {
         if (!selfCol) throw new Error('{This} is only valid in a column formula');
         col = selfCol;
@@ -1929,18 +2059,20 @@
     }
 
     function sampleWorkspace(orgName) {
-      const customers = 'tbl_customers', products = 'tbl_products', orders = 'tbl_orders', lines = 'tbl_lines';
+      const customers = 'tbl_customers', products = 'tbl_products', orders = 'tbl_orders', lines = 'tbl_lines', pad = 'tbl_pad';
       const c = {
         name: 'col_c_name', code: 'col_c_code', email: 'col_c_email', phone: 'col_c_phone', city: 'col_c_city', status: 'col_c_status'
       };
       const p = { sku: 'col_p_sku', no: 'col_p_no', name: 'col_p_name', price: 'col_p_price', uom: 'col_p_uom', cat: 'col_p_cat', active: 'col_p_active' };
       const o = { num: 'col_o_num', cust: 'col_o_cust', date: 'col_o_date', status: 'col_o_status', po: 'col_o_po', pri: 'col_o_pri', notes: 'col_o_notes', hold: 'col_o_hold', follow: 'col_o_follow', file: 'col_o_file', count: 'col_o_count', total: 'col_o_total' };
       const l = { order: 'col_l_order', seq: 'col_l_seq', itemno: 'col_l_itemno', product: 'col_l_prod', cat: 'col_l_cat', qty: 'col_l_qty', price: 'col_l_price', total: 'col_l_total', run: 'col_l_run', notes: 'col_l_notes' };
+      const s = { q: 'col_pad_q', hit: 'col_pad_hit' };
       const rec = {
         c1: 'rec_cust_acme', c2: 'rec_cust_north', c3: 'rec_cust_blue', c4: 'rec_cust_brondby',
         p1: 'rec_prod_wa', p2: 'rec_prod_wb', p3: 'rec_prod_crate', p4: 'rec_prod_rush', p5: 'rec_prod_label',
         o1: 'rec_ord_41', o2: 'rec_ord_42',
-        l1: 'rec_line_1', l2: 'rec_line_2', l3: 'rec_line_3', l4: 'rec_line_4'
+        l1: 'rec_line_1', l2: 'rec_line_2', l3: 'rec_line_3', l4: 'rec_line_4',
+        pad1: 'rec_pad_1'
       };
       const ts = nowIso();
       const grpOps = 'grp_ops';
@@ -1950,9 +2082,23 @@
         groups: [
           { id: grpOps, name: 'Operations', collapsed: false, kind: 'program', color: 'teal' }
         ],
+        names: [
+          { id: 'nm_findcust', name: 'FindCustomer', tableId: pad, recId: rec.pad1, colId: s.q }
+        ],
         tables: [
           {
-            id: customers, name: 'Customers', groupId: grpOps, description: 'Bill-to accounts used on sales orders', color: 'teal',
+            id: pad, name: 'Search pad', groupId: grpOps, description: 'One named cell (FindCustomer). Type here; Customers filters from it, and Customer match points at it.', color: 'gold',
+            columns: [
+              { id: s.q, name: 'Find', type: 'text', width: 200, description: 'Named FindCustomer. Change this cell; other sheets follow.' },
+              { id: s.hit, name: 'Customer match', type: 'formula', formula: { expression: 'FILTER("Customers","Name",{@FindCustomer},"Name")', resultType: 'text' }, description: 'Points at {@FindCustomer} and searches Customers.' }
+            ],
+            records: [
+              { id: rec.pad1, createdAt: ts, updatedAt: ts, data: { [s.q]: '' } }
+            ]
+          },
+          {
+            id: customers, name: 'Customers', groupId: grpOps, description: 'Bill-to accounts used on sales orders. Live-filtered from named cell FindCustomer on Search pad.', color: 'teal',
+            rowFilter: { name: 'FindCustomer', columnId: c.name, mode: 'contains' },
             columns: [
               { id: c.code, name: 'Account', type: 'text', required: true, unique: true },
               { id: c.name, name: 'Name', type: 'text', required: true },
@@ -2606,6 +2752,7 @@
           selectingDrag: false,
           selectMode: 'cells',
           ctxMenu: { open: false, x: 0, y: 0, kind: 'cell' },
+          nameDlg: { open: false, mode: 'name', text: '', columnId: '', match: 'contains' },
           formulaRel: { colName: 'This', offset: -1 },
           editing: { recId: null, colId: null },
           search: '',
@@ -2692,6 +2839,14 @@
           return this.currentTable.records.find((r) => r.id === this.selectedRecordId) || null;
         },
         formRecord() { return this.selectedRecord; },
+        namedCells() { return this.store.names || []; },
+        selectedCellName() {
+          const t = this.currentTable;
+          if (!t || !this.selectedCell || !this.selectedCell.recId) return '';
+          const rec = t.records.find((r) => r.id === this.selectedCell.recId);
+          const col = findColumn(t, this.selectedCell.colId);
+          return rec && col ? cellNameOf(this.store, rec, col) : '';
+        },
         hiddenColumnCount() { return this.currentTable ? this.currentTable.columns.filter((c) => c.hidden).length : 0; },
         hiddenRowCount() { return this.currentTable ? this.currentTable.records.filter((r) => r.hidden).length : 0; },
         selectedRecords() {
@@ -2712,6 +2867,11 @@
             { id: 'duplicate', label: nRows ? 'Duplicate ' + nRows + ' ' + rowWord : 'Duplicate row', kbd: 'Ctrl+D', disabled: !nRows },
             { sep: true },
             { id: 'fill', label: 'Fill down', disabled: cells.length < 2 },
+            { sep: true },
+            { id: 'namecell', label: 'Name this cell…', disabled: cells.length !== 1 },
+            { id: 'gotoname', label: 'Go to named cell…', disabled: !this.namedCells.length },
+            { id: 'filtername', label: 'Filter sheet from named cell…' },
+            { sep: true },
             { id: 'clear', label: 'Clear cells', kbd: 'Del', disabled: !hasSel },
             { id: 'insert', label: 'Insert row below', disabled: !this.canAddRows },
             { sep: true },
@@ -2767,6 +2927,17 @@
           const q = this.search.toLowerCase();
           if (q) {
             rows = rows.filter((r) => t.columns.some((c) => String(this.displayValue(r, c)).toLowerCase().includes(q)));
+          }
+          const rf = t.rowFilter;
+          if (rf && rf.name && rf.columnId) {
+            const needle = String(displayNamedCell(this.store, rf.name) || '').trim().toLowerCase();
+            if (needle) {
+              const col = findColumn(t, rf.columnId);
+              rows = rows.filter((r) => {
+                const hay = String(this.displayValue(r, col) || '').toLowerCase();
+                return rf.mode === 'equals' ? hay === needle : hay.includes(needle);
+              });
+            }
           }
           if (this.sort.colId) {
             const col = findColumn(t, this.sort.colId);
@@ -2874,11 +3045,93 @@
       },
       methods: {
         rawStored, displayForLink, hasFormula,
+        cellName(rec, col) { return cellNameOf(this.store, rec, col); },
+        onNameBoxChange(val) {
+          const t = this.currentTable;
+          if (!t || !this.selectedCell.recId || !this.selectedCell.colId) return;
+          const rec = t.records.find((r) => r.id === this.selectedCell.recId);
+          const col = findColumn(t, this.selectedCell.colId);
+          this.setCellName(rec, col, val);
+        },
+        openNameDlg() {
+          const rec = this.selectedRecord;
+          const col = this.currentTable && findColumn(this.currentTable, this.selectedCell.colId);
+          if (!rec || !col) return this.toast('Select one cell first.', 'warn');
+          this.nameDlg = { open: true, mode: 'name', text: cellNameOf(this.store, rec, col) || '', columnId: col.id, match: 'contains' };
+        },
+        openFilterDlg() {
+          const colId = this.selectedCell.colId || (this.visibleColumns[0] && this.visibleColumns[0].id) || '';
+          const rf = this.currentTable && this.currentTable.rowFilter;
+          this.nameDlg = { open: true, mode: 'filter', text: (rf && rf.name) || (this.namedCells[0] && this.namedCells[0].name) || '', columnId: (rf && rf.columnId) || colId, match: (rf && rf.mode) || 'contains' };
+        },
+        saveNameDlg() {
+          if (this.nameDlg.mode === 'filter') {
+            if (!this.nameDlg.text) return this.toast('Pick a named cell.', 'warn');
+            if (!this.currentTable) return;
+            this.currentTable.rowFilter = { name: this.nameDlg.text, columnId: this.nameDlg.columnId, mode: this.nameDlg.match || 'contains' };
+            this.audit('table.filter', this.currentTable.name, '@' + this.nameDlg.text);
+            this.toast('This sheet now filters from @' + this.nameDlg.text + '.');
+            this.nameDlg.open = false;
+            return;
+          }
+          const rec = this.selectedRecord;
+          const col = this.currentTable && findColumn(this.currentTable, this.selectedCell.colId);
+          this.setCellName(rec, col, this.nameDlg.text);
+          this.nameDlg.open = false;
+        },
+        clearSheetFilter() {
+          if (this.currentTable) this.currentTable.rowFilter = null;
+          this.nameDlg.open = false;
+          this.toast('Sheet filter cleared.');
+        },
+        setCellName(rec, col, raw) {
+          const t = this.currentTable;
+          if (!t || !rec || !col) return;
+          const name = String(raw || '').trim().replace(/^@/, '');
+          if (!this.store.names) this.store.names = [];
+          this.store.names = this.store.names.filter((n) => !(n.recId === rec.id && n.colId === col.id));
+          if (!name) {
+            this.audit('name.clear', t.name + '.' + col.name, '');
+            this.toast('Cell name removed.');
+            return;
+          }
+          if (!validCellName(name)) return this.toast('Use a name like FindCustomer (letters, numbers, underscore).', 'warn');
+          const clash = this.store.names.find((n) => n.name.toLowerCase() === name.toLowerCase());
+          if (clash) return this.toast('That name is already used.', 'warn');
+          this.store.names.push({ id: uid('nm'), name, tableId: t.id, recId: rec.id, colId: col.id });
+          this.audit('name.set', t.name + '.' + col.name, '@' + name);
+          this.toast('Named {@' + name + '}. Other cells can point here or filter from it.');
+        },
+        goToNamedCell() {
+          const n = this.namedCells[0];
+          if (!n) return;
+          const pick = this.namedCells.length === 1 ? n : this.namedCells.find((x) => x.name === this.selectedCellName) || n;
+          this.selectTable(pick.tableId);
+          this.$nextTick(() => {
+            const t = this.currentTable;
+            const rec = t && t.records.find((r) => r.id === pick.recId);
+            const col = t && findColumn(t, pick.colId);
+            if (rec && col) this.applySelection({ recId: rec.id, colId: col.id }, { recId: rec.id, colId: col.id });
+          });
+        },
+        pruneNames() {
+          const recIds = new Set();
+          const colIds = new Set();
+          (this.store.tables || []).forEach((t) => {
+            (t.records || []).forEach((r) => recIds.add(r.id));
+            (t.columns || []).forEach((c) => colIds.add(c.id));
+          });
+          this.store.names = (this.store.names || []).filter((n) => recIds.has(n.recId) && colIds.has(n.colId));
+        },
         isKeyLink(col) {
           return !!(col && col.type === 'link' && col.link && col.link.mode === 'key');
         },
+        onKeyNameChange() {
+          if (this.colEditor.draft.link.keyName) this.colEditor.draft.link.keyColumnId = '';
+        },
         keySourceLabel(col) {
           if (!this.isKeyLink(col)) return '';
+          if (col.link.keyName) return '@' + col.link.keyName;
           if (!col.link.keyColumnId) return 'this column';
           const src = this.currentTable && findColumn(this.currentTable, col.link.keyColumnId);
           return src ? src.name : 'the key column';
@@ -2887,7 +3140,7 @@
           if (!col) return false;
           if (col.type === 'rollup' || col.type === 'autonumber' || col.type === 'lookup') return true;
           if (col.type === 'formula' && !formulaUsesTypedValue(col)) return true;
-          if (this.isKeyLink(col) && col.link.keyColumnId) return true;
+          if (this.isKeyLink(col) && (col.link.keyColumnId || col.link.keyName)) return true;
           return false;
         },
         isComputedCell(rec, col) {
@@ -2903,6 +3156,8 @@
         cellTitle(rec, col) {
           const ch = this.cellChange(rec, col);
           if (ch) return 'Was ' + (ch.before || 'blank') + ' → ' + (ch.after || 'blank');
+          const nm = cellNameOf(this.store, rec, col);
+          if (nm) return '{@' + nm + '} — other cells can point here or filter from this value';
           if (hasFormula(col) && formulaUsesTypedValue(col)) {
             const raw = rawStored(rec, col);
             const rawText = (col.type === 'date' || col.type === 'datetime') ? formatDateDMY(raw) : String(raw ?? '');
@@ -3279,6 +3534,7 @@
           if (inbound.length) return this.toast('Cannot delete: linked from ' + inbound.join(', '), 'error');
           if (!(await this.ask('Delete table', 'Delete ' + t.name + ' and all of its rows? This stays in the audit log.', { danger: true, ok: 'Delete' }))) return;
           this.store.tables = this.store.tables.filter((x) => x.id !== t.id);
+          this.pruneNames();
           if (this.currentTableId === t.id) this.currentTableId = this.store.tables[0] && this.store.tables[0].id;
           this.audit('table.delete', t.name, '');
         },
@@ -3286,7 +3542,7 @@
           return {
             name: '', type: type || 'text', required: false, unique: false, hidden: false, description: '', width: 160,
             options: [], decimals: 2, min: null, max: null, prefix: '', pad: 4, seq: 0,
-            link: { tableId: '', displayColumnId: '', mode: 'pick', matchColumnId: '', keyColumnId: '', notFound: 'blank', searchColumnId: '', searchScope: 'row' },
+            link: { tableId: '', displayColumnId: '', mode: 'pick', matchColumnId: '', keyColumnId: '', keyName: '', notFound: 'blank', searchColumnId: '', searchScope: 'row' },
             lookup: { linkColumnId: '', fieldColumnId: '' },
             formula: { expression: '', resultType: 'auto' },
             rollup: { childTableId: '', linkColumnId: '', aggregate: 'count', valueColumnId: '' },
@@ -3296,9 +3552,10 @@
         openColumnEditor(col) {
           if (this.mode !== 'architect') return;
           const draft = col ? clone(Object.assign(this.blankColumn(col.type), col)) : this.blankColumn('text');
-          if (!draft.link) draft.link = { tableId: '', displayColumnId: '', mode: 'pick', matchColumnId: '', keyColumnId: '', notFound: 'blank', searchColumnId: '', searchScope: 'row' };
+          if (!draft.link) draft.link = { tableId: '', displayColumnId: '', mode: 'pick', matchColumnId: '', keyColumnId: '', keyName: '', notFound: 'blank', searchColumnId: '', searchScope: 'row' };
           if (!draft.link.mode) draft.link.mode = 'pick';
           if (draft.link.keyColumnId == null) draft.link.keyColumnId = '';
+          if (draft.link.keyName == null) draft.link.keyName = '';
           if (!draft.link.notFound) draft.link.notFound = 'blank';
           if (!draft.link.searchScope) draft.link.searchScope = 'row';
           if (draft.link.searchColumnId == null) draft.link.searchColumnId = '';
@@ -3381,6 +3638,7 @@
           if (!(await this.ask('Delete column', 'Delete ' + d.name + '? Existing values in this column are removed.', { danger: true, ok: 'Delete' }))) return;
           t.columns = t.columns.filter((c) => c.id !== d.id);
           t.records.forEach((r) => { delete r.data[d.id]; });
+          this.pruneNames();
           this.audit('column.delete', t.name + '.' + d.name, '');
           this.colEditor.open = false;
         },
@@ -3575,6 +3833,9 @@
           else if (id === 'paste') this.pasteFromClipboard();
           else if (id === 'duplicate') this.duplicateSelectedRows();
           else if (id === 'fill') this.fillDownSelection();
+          else if (id === 'namecell') this.openNameDlg();
+          else if (id === 'gotoname') this.goToNamedCell();
+          else if (id === 'filtername') this.openFilterDlg();
           else if (id === 'clear') this.clearSelectedCells();
           else if (id === 'insert') this.insertRowBelow();
           else if (id === 'selrow') this.selectCurrentRows();
@@ -3895,6 +4156,7 @@
           this.selectionAnchor = { recId: null, colId: null };
           this.selectionFocus = { recId: null, colId: null };
           recs.forEach((rec) => this.audit('record.delete', t.name, rec.id));
+          this.pruneNames();
           this.toast(recs.length === 1 ? 'Row deleted.' : recs.length + ' rows deleted.');
         },
         selectionTsv() {
@@ -4066,7 +4328,7 @@
         },
         keysBlockedByUi() {
           if (this.docReaderOpen) return true;
-          return !!(this.needsSetup || this.pinOpen || this.colEditor.open || this.tableEditor.open || this.groupEditor.open || this.rowAudit.open || this.confirmDlg.open || this.settingsOpen || this.fieldsOpen || this.auditOpen);
+          return !!(this.needsSetup || this.pinOpen || this.colEditor.open || this.tableEditor.open || this.groupEditor.open || this.rowAudit.open || this.confirmDlg.open || this.settingsOpen || this.fieldsOpen || this.auditOpen || this.nameDlg.open);
         },
         emptyValueFor(col) {
           if (col.type === 'checkbox') return false;
@@ -4508,6 +4770,18 @@
           if (rel.tables.some((t) => !t.groupId)) console.warn('sample sheet missing category');
           const clip = parseClipboardGrid('10\tHeat-treated\n4\tSame-day');
           if (clip.length !== 2 || clip[0][0] !== '10' || clip[1][1] !== 'Same-day') console.warn('clipboard grid parse failed', clip);
+          const named = sampleWorkspace('Named');
+          const padT = named.tables.find((t) => t.name === 'Search pad');
+          const findCol = padT.columns.find((c) => c.name === 'Find');
+          const hitCol = padT.columns.find((c) => c.name === 'Customer match');
+          const cust = named.tables.find((t) => t.name === 'Customers');
+          padT.records[0].data[findCol.id] = 'brond';
+          const hit = formatDisplay(named, padT, padT.records[0], hitCol);
+          if (String(hit).toLowerCase().indexOf('brondby') < 0) console.warn('named FILTER failed', hit);
+          const needle = String(displayNamedCell(named, 'FindCustomer') || '').toLowerCase();
+          if (needle !== 'brond') console.warn('named cell value failed', needle);
+          const shown = cust.records.filter((r) => String(formatDisplay(named, cust, r, cust.columns.find((c) => c.name === 'Name'))).toLowerCase().includes(needle));
+          if (shown.length !== 1) console.warn('named filter count failed', shown.length);
         },
         onPaste(e) {
           const target = e.target;
