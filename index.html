@@ -65,8 +65,6 @@
     .ctx-menu .kbd { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; color: #8ea0be; }
     .ctx-menu .danger { color: #fca5a5; }
     .ctx-sep { height: 1px; background: #223250; margin: 4px 0; }
-    .data-grid tr.row-own td.sticky-col { box-shadow: inset 3px 0 0 #f5b942; }
-    .data-grid td.ptr-cell, .data-grid td.fx-cell { box-shadow: inset 0 0 0 1px rgba(62,207,190,.4); }
     .ptr-chip { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; color: #3ecfbe; background: rgba(62,207,190,.12); border-radius: 3px; padding: 0 4px; line-height: 14px; flex-shrink: 0; margin-top: 2px; }
     .addr-box { min-width: 56px; height: 26px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; }
     .data-grid td.locked { color: #8ea0be; }
@@ -225,10 +223,6 @@
       <div v-if="mode==='architect'" class="shrink-0 bg-gold text-ink-900 text-[12px] font-semibold px-4 py-1">
         Architect Mode is unlocked — categories, sheets, lookups, and formulas can be changed. Switch back to Operator Mode before handing this screen to data-entry staff.
       </div>
-      <div v-if="pointPick" class="shrink-0 bg-teal text-ink-900 text-[12px] font-semibold px-4 py-1">
-        Click the cell this one should copy (like Excel =A1). Esc to cancel.
-      </div>
-
       <div class="flex-1 flex flex-col md:flex-row min-h-0 relative">
         <!-- Sidebar overlay (mobile) -->
         <div v-if="sidebarOpen" class="md:hidden absolute inset-0 bg-black/50 z-20" @click="sidebarOpen=false"></div>
@@ -417,10 +411,7 @@
                   <button class="px-2 py-1" :class="view==='grid' ? 'bg-ink-700' : 'text-mute'" @click="view='grid'">Grid</button>
                   <button class="px-2 py-1" :class="view==='form' ? 'bg-ink-700' : 'text-mute'" @click="view='form'">Form</button>
                 </div>
-                <div v-if="canAddRows" class="inline-flex rounded-md overflow-hidden border border-teal">
-                  <button class="text-[11px] px-2 py-1 bg-teal text-ink-900 font-semibold" title="Add a row. Click any cell and type — a date, text, or =A1 like Excel. Column formulas fill empty cells only." @click="addRecord(false)">+ Row</button>
-                  <button class="text-[11px] px-2 py-1 bg-ink-900 text-teal font-semibold border-l border-teal/50" title="Add a row that starts with no column formulas" @click="addRecord(true)">own rules</button>
-                </div>
+                <button v-if="canAddRows" class="text-[11px] rounded-md px-2 py-1 bg-teal text-ink-900 font-semibold" @click="addRecord()">+ Row</button>
                 <button class="text-[11px] rounded-md px-2 py-1 border border-line hover:bg-ink-700" @click="copySelected" :disabled="!selectedCellEntries().length">Copy</button>
                 <button class="text-[11px] rounded-md px-2 py-1 border border-line hover:bg-ink-700" @click="pasteFromClipboard" :disabled="!visibleColumns.length">Paste</button>
                 <button class="text-[11px] rounded-md px-2 py-1 border border-line hover:bg-ink-700" @click="duplicateSelectedRows" :disabled="!selectedRecords.length">Duplicate</button>
@@ -504,7 +495,7 @@
                       <p class="text-xs">Add a row, or open Documents and enter while reading the source file.</p>
                     </td>
                   </tr>
-                  <tr v-for="(rec, idx) in filteredRecords" :key="rec.id" :class="[isRowSelected(rec) && 'bg-teal/5', rec.hidden && 'opacity-50', rec.locked && 'row-locked', rec.rowOwn && 'row-own']">
+                  <tr v-for="(rec, idx) in filteredRecords" :key="rec.id" :class="[isRowSelected(rec) && 'bg-teal/5', rec.hidden && 'opacity-50', rec.locked && 'row-locked']">
                     <td class="sticky-col text-center text-mute text-[11px] cursor-pointer"
                       :class="[isRowSelected(rec) && 'rowhead-sel']"
                       :style="{ width: rowHeadWidth + 'px', minWidth: rowHeadWidth + 'px' }"
@@ -516,7 +507,6 @@
                           <icon :name="rec.locked ? 'lock' : 'unlock'" size="13"></icon>
                         </button>
                         <span class="tabular-nums leading-none">{{ recordNumber(rec) }}</span>
-                        <span v-if="rec.rowOwn" class="ptr-chip" title="This row does not follow column rules">own</span>
                         <button class="p-0.5 rounded hover:bg-ink-900 text-mute shrink-0" :class="(rec.audit && rec.audit.length) && 'text-gold'" title="Row history" @mousedown.stop @click.stop="openRowAudit(rec)"><icon name="clock" size="11"></icon></button>
                         <button class="p-0.5 rounded hover:bg-ink-900 text-red-300 shrink-0" title="Delete this row" @mousedown.stop @click.stop="deleteRows([rec])"><icon name="trash" size="11"></icon></button>
                       </div>
@@ -524,7 +514,7 @@
                     </td>
                     <td v-for="col in visibleColumns" :key="col.id"
                       class="px-0 align-top"
-                      :class="[cellHardLocked(rec, col) && 'locked', cellChange(rec, col) && 'changed', (cellPtr(rec, col) || cellFx(rec, col)) && (cellFx(rec, col) ? 'fx-cell' : 'ptr-cell'), isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
+                      :class="[isComputedCell(rec, col) && 'locked', cellChange(rec, col) && 'changed', isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
                       @mousedown.stop="onCellMouseDown($event, rec, col)"
                       @mouseenter="onCellMouseEnter(rec, col)"
                       @contextmenu.prevent="openCtxMenu($event, 'cell', rec, col)">
@@ -542,8 +532,6 @@
                           </div>
                         </div>
                         <span v-if="cellRuleType(rec, col)" class="ptr-chip" :title="'This cell is ' + cellRuleType(rec, col) + ' (column stays ' + col.type + ')'">{{ typeShort(cellRuleType(rec, col)) }}</span>
-                        <span v-else-if="cellFx(rec, col)" class="ptr-chip" :title="cellFx(rec, col)">fx</span>
-                        <span v-else-if="cellPtr(rec, col)" class="ptr-chip" :title="'This cell shows ' + cellPtr(rec, col)">={{ cellPtr(rec, col) }}</span>
                       </div>
                     </td>
                   </tr>
@@ -574,18 +562,17 @@
                   <template v-else>Select a row in Grid view to start entry.</template>
                 </div>
                 <form v-else class="space-y-4" @submit.prevent="saveForm(false)">
-                  <p v-if="formRecord.rowOwn" class="text-[12px] text-gold">This row uses its own rules, not the column defaults. Right-click a field → Set a rule for this cell.</p>
                   <div v-for="col in visibleColumns" :key="col.id" class="grid gap-1">
                     <label class="text-xs text-mute flex items-center gap-2">
                       {{ col.name }}
                       <span class="uppercase tracking-wide">{{ typeShort(col.type) }}</span>
                       <span v-if="col.required" class="text-red-300">Required</span>
                     </label>
-                    <div v-if="cellHardLocked(formRecord, col)" class="rounded-lg bg-ink-850 border border-line px-3 py-2 text-sm text-mute">
+                    <div v-if="isComputedCell(formRecord, col)" class="rounded-lg bg-ink-850 border border-line px-3 py-2 text-sm text-mute">
                       {{ displayValue(formRecord, col) || '—' }}
                     </div>
-                    <p v-if="cellHardLocked(formRecord, col) && isKeyLink(col)" class="text-[11px] text-gold">Filled by XLOOKUP from {{ keySourceLabel(col) }}. Type the key in {{ keySourceLabel(col) }}.</p>
-                    <p v-else-if="cellHardLocked(formRecord, col) && col.type==='lookup'" class="text-[11px] text-gold">Live field from the linked row.</p>
+                    <p v-if="isComputedCell(formRecord, col) && isKeyLink(col)" class="text-[11px] text-gold">Filled by XLOOKUP from {{ keySourceLabel(col) }}.</p>
+                    <p v-else-if="isComputedCell(formRecord, col) && col.type==='lookup'" class="text-[11px] text-gold">Live field from the linked row.</p>
                     <template v-else-if="col.type==='attachment'">
                       <attach-cell :column="effectiveCol(formRecord, col)" :record="formRecord" variant="form" :locked="!!formRecord.locked" @commit="onFormCommit" @open="openAttachment" />
                     </template>
@@ -784,7 +771,7 @@
           </label>
           <div v-if="colEditor.draft.link.mode==='key'" class="grid md:grid-cols-2 gap-3">
             <label class="text-sm">Type the key in
-              <select v-model="colEditor.draft.link.keyColumnId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2" @change="colEditor.draft.link.keyName=''">
+              <select v-model="colEditor.draft.link.keyColumnId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
                 <option value="">This column</option>
                 <option v-for="c in keySourceColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
               </select>
@@ -1023,29 +1010,6 @@
         <div class="flex justify-end gap-2">
           <button class="px-3 py-1.5 text-sm" @click="resolveConfirm(false)">Cancel</button>
           <button class="px-3 py-1.5 text-sm rounded-lg font-semibold" :class="confirmDlg.danger ? 'bg-red-500 text-white' : 'bg-teal text-ink-900'" @click="resolveConfirm(true)">{{ confirmDlg.ok || 'Confirm' }}</button>
-        </div>
-      </modal-frame>
-
-      <modal-frame v-if="lookupFrom.open" title="Look this up using the cell above" @close="lookupFrom.open=false">
-        <p class="text-sm text-mute mb-3">Only this cell leaves the column rule. It searches with the value in <span class="font-mono text-gold">{{ lookupFrom.keyAddr }}</span> (the cell above). Other rows stay on the column rule.</p>
-        <label class="block text-sm mb-3">Sheet to search
-          <select v-model="lookupFrom.tableId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2" @change="onLookupFromTableChange">
-            <option v-for="tb in store.tables" :key="tb.id" :value="tb.id">{{ tb.name }}</option>
-          </select>
-        </label>
-        <label class="block text-sm mb-3">Match this column to the cell above
-          <select v-model="lookupFrom.matchColumnId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
-            <option v-for="c in lookupFromColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
-          </select>
-        </label>
-        <label class="block text-sm mb-4">Show this field
-          <select v-model="lookupFrom.fieldColumnId" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2">
-            <option v-for="c in lookupFromColumns" :key="'r'+c.id" :value="c.id">{{ c.name }}</option>
-          </select>
-        </label>
-        <div class="flex justify-end gap-2">
-          <button class="px-3 py-1.5 text-sm" @click="lookupFrom.open=false">Cancel</button>
-          <button class="px-3 py-1.5 text-sm rounded-lg bg-teal text-ink-900 font-semibold" @click="saveLookupFromAbove">Look up</button>
         </div>
       </modal-frame>
 
@@ -1316,7 +1280,6 @@
         settings: { orgName: '', pinHash: '' },
         groups: [],
         tables: [],
-        names: [],
         audit: []
       };
     }
@@ -1326,7 +1289,6 @@
       if (!Array.isArray(store.groups)) store.groups = [];
       if (!Array.isArray(store.tables)) store.tables = [];
       if (!Array.isArray(store.audit)) store.audit = [];
-      if (!Array.isArray(store.names)) store.names = [];
       if (!store.settings) store.settings = { orgName: '', pinHash: '' };
       if (!store.groups.length && store.tables.length) {
         store.groups.push({ id: 'grp_default', name: 'Sheets', collapsed: false, kind: 'program', color: 'teal' });
@@ -1350,7 +1312,6 @@
           if (c.type === 'search' && c.link) {
             if (!c.link.searchScope) c.link.searchScope = 'row';
             if (c.link.searchColumnId == null) c.link.searchColumnId = c.link.displayColumnId || '';
-            if (c.link.keyName == null) c.link.keyName = '';
           }
         });
         (t.records || []).forEach((r) => {
@@ -1425,26 +1386,8 @@
     function snapshotCellRule(rec, col) {
       return {
         data: rec && rec.data ? rec.data[col.id] : null,
-        fx: cellFxOf(rec, col) || '',
-        ptr: cellPtrOf(rec, col) || '',
-        own: cellOwnOf(rec, col),
-        follow: !!(rec && rec.followCol && rec.followCol[col.id]),
         rule: cellRuleOf(rec, col) ? clone(cellRuleOf(rec, col)) : null
       };
-    }
-    function cellPtrOf(rec, col) {
-      if (!rec || !col || !rec.ptr) return '';
-      return String(rec.ptr[col.id] || '').trim();
-    }
-    function cellFxOf(rec, col) {
-      if (!rec || !col || !rec.fx) return '';
-      return String(rec.fx[col.id] || '').trim();
-    }
-    function cellOwnOf(rec, col) {
-      return !!(rec && col && rec.own && rec.own[col.id]);
-    }
-    function rowUsesOwnRules(rec) {
-      return !!(rec && rec.rowOwn);
     }
     function cellRuleOf(rec, col) {
       if (!rec || !col || !rec.rule) return null;
@@ -1468,21 +1411,6 @@
       out.name = col.name;
       return out;
     }
-    function skipsColumnRule(rec, col) {
-      if (!rec || !col) return false;
-      if (cellRuleOf(rec, col)) return false;
-      if (col.type === 'rollup' || col.type === 'autonumber') return false;
-      if (cellOwnOf(rec, col)) return true;
-      if (rec.followCol && rec.followCol[col.id]) return false;
-      return rowUsesOwnRules(rec);
-    }
-    function columnLocksTypedValue(col) {
-      if (!col) return false;
-      if (col.type === 'rollup' || col.type === 'autonumber' || col.type === 'lookup') return true;
-      if (hasFormula(col) && !formulaUsesTypedValue(col)) return true;
-      if (isLinkCol(col) && col.link && col.link.mode === 'key' && col.link.keyColumnId) return true;
-      return false;
-    }
     function resolveA1(store, table, addr, stack) {
       const p = parseA1(addr);
       if (!p || p.row < 0 || p.col < 0) throw new Error('Bad cell ' + addr);
@@ -1496,42 +1424,6 @@
       if (!col || !rec) return '';
       return valueOf(store, t, rec, col, stack);
     }
-    function namedCellDef(store, name) {
-      const n = String(name || '').replace(/^@/, '').trim().toLowerCase();
-      if (!n || !store || !Array.isArray(store.names)) return null;
-      return store.names.find((x) => String(x.name || '').toLowerCase() === n) || null;
-    }
-    function namedCellValue(store, name, stack) {
-      const def = namedCellDef(store, name);
-      if (!def) throw new Error('Unknown name ' + name);
-      const t = findTable(store, def.tableId);
-      const rec = t && t.records.find((r) => r.id === def.recId);
-      const col = t && findColumn(t, def.colId);
-      if (!t || !rec || !col) return '';
-      stack = stack || new Set();
-      const key = 'name:' + def.id;
-      if (stack.has(key)) return '#CYCLE!';
-      stack.add(key);
-      return valueOf(store, t, rec, col, stack);
-    }
-    function displayNamedCell(store, name) {
-      const def = namedCellDef(store, name);
-      if (!def) return '';
-      const t = findTable(store, def.tableId);
-      const rec = t && t.records.find((r) => r.id === def.recId);
-      const col = t && findColumn(t, def.colId);
-      if (!t || !rec || !col) return '';
-      return formatDisplay(store, t, rec, col);
-    }
-    function cellNameOf(store, rec, col) {
-      if (!store || !rec || !col) return '';
-      const hit = (store.names || []).find((n) => n.recId === rec.id && n.colId === col.id);
-      return hit ? hit.name : '';
-    }
-    function validCellName(s) {
-      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(s || '').trim());
-    }
-
     /* ---------------- dates (Excel-style, day/month/year) ---------------- */
     const DAY_MS = 86400000;
     function utcDate(y, m, d) {
@@ -1843,14 +1735,6 @@
           return d.getUTCDate();
         }
         if (f === 'XLOOKUP') return formulaXlookup(ctx, args);
-        if (f === 'REF' || f === 'NAME') {
-          if (!ctx || !ctx.store) throw new Error('REF needs a workspace');
-          return namedCellValue(ctx.store, String(args[0] ?? ''), ctx.stack);
-        }
-        if (f === 'FILTER') {
-          if (!ctx || !ctx.store) throw new Error('FILTER needs a workspace');
-          return formulaFilter(ctx, args);
-        }
         if (f === 'ROW') {
           if (!ctx || !ctx.table || !ctx.rec) throw new Error('ROW needs a row');
           return rowIndex(ctx.table, ctx.rec) + 1;
@@ -1929,9 +1813,7 @@
       if (!isLinkCol(col)) return rawStored(rec, col);
       if (col.link.mode === 'key') {
         let key = null;
-        if (col.link.keyName) {
-          try { key = namedCellValue(store, col.link.keyName, new Set()); } catch (e) { key = null; }
-        } else if (col.link.keyColumnId) {
+        if (col.link.keyColumnId) {
           const keyCol = findColumn(table, col.link.keyColumnId);
           key = keyCol ? rawStored(rec, keyCol) : null;
         } else {
@@ -1944,27 +1826,6 @@
         return found ? found.id : null;
       }
       return rawStored(rec, col);
-    }
-
-    function formulaFilter(ctx, args) {
-      const tableName = String(args[0] ?? '');
-      const matchName = String(args[1] ?? '');
-      const query = args[2];
-      const returnName = args.length > 3 ? String(args[3] ?? '') : matchName;
-      if (query == null || query === '') return '';
-      const table = ctx.store.tables.find((t) => t.name.toLowerCase() === tableName.toLowerCase());
-      if (!table) throw new Error('Unknown table ' + tableName);
-      const matchCol = colByName(table, matchName);
-      const retCol = colByName(table, returnName);
-      if (!matchCol) throw new Error('Unknown match column ' + matchName);
-      if (!retCol) throw new Error('Unknown return column ' + returnName);
-      const q = String(query).trim().toLowerCase();
-      const hits = table.records.map((r) => {
-        const shown = String(formatDisplay(ctx.store, table, r, matchCol) || '').toLowerCase();
-        return shown.includes(q) ? valueOf(ctx.store, table, r, retCol, ctx.stack) : null;
-      }).filter((x) => x !== null && x !== '');
-      if (!hits.length) return '';
-      return hits.length === 1 ? hits[0] : hits;
     }
 
     function formulaXlookup(ctx, args) {
@@ -2005,26 +1866,6 @@
       stack = stack || new Set();
       if (!col) return null;
       col = effectiveColumn(rec, col);
-      if (skipsColumnRule(rec, col) && !cellFxOf(rec, col) && !cellPtrOf(rec, col) && !cellRuleOf(rec, col)) return rawStored(rec, col);
-      const fx = cellFxOf(rec, col);
-      if (fx) {
-        const key = table.id + ':' + rec.id + ':' + col.id + ':fx';
-        if (stack.has(key)) return '#CYCLE!';
-        stack.add(key);
-        const ctx = {
-          resolve(name) { return resolveRef(store, table, rec, name, stack, col); },
-          store, table, rec, col, stack
-        };
-        const r = evaluateFormula(fx, ctx);
-        return r.ok ? r.value : r.value;
-      }
-      const ptr = cellPtrOf(rec, col);
-      if (ptr) {
-        const key = table.id + ':' + rec.id + ':' + col.id + ':ptr';
-        if (stack.has(key)) return '#CYCLE!';
-        stack.add(key);
-        try { return resolveA1(store, table, ptr, stack); } catch (e) { return '#REF!'; }
-      }
       if (col.type === 'rollup') {
       const spec = col.rollup || {};
       const child = findTable(store, spec.childTableId);
@@ -2070,8 +1911,7 @@
     function valueOf(store, table, rec, col, stack) {
       if (!col) return null;
       col = effectiveColumn(rec, col);
-      if (skipsColumnRule(rec, col) && !cellFxOf(rec, col) && !cellPtrOf(rec, col) && !cellRuleOf(rec, col)) return asFormulaValue(rawStored(rec, col), col);
-      if (cellFxOf(rec, col) || col.type === 'rollup' || col.type === 'lookup' || hasFormula(col) || cellPtrOf(rec, col)) return computeValue(store, table, rec, col, stack);
+      if (col.type === 'rollup' || col.type === 'lookup' || hasFormula(col)) return computeValue(store, table, rec, col, stack);
       if (isLinkCol(col)) return resolveLinkRecordId(store, table, rec, col);
       return asFormulaValue(rawStored(rec, col), col);
     }
@@ -2101,10 +1941,6 @@
       const rawName = parsed.name;
       let col = null;
       const isThis = /^(this|self|value)$/i.test(rawName);
-      const named = rawName.charAt(0) === '@' || (!colByName(table, rawName) && namedCellDef(store, rawName));
-      if (named && parsed.offStart == null) {
-        return namedCellValue(store, rawName, stack);
-      }
       if (isThis) {
         if (!selfCol) throw new Error('{This} is only valid in a column formula');
         col = selfCol;
@@ -2171,9 +2007,7 @@
         if (agg === 'count') return String(v ?? 0);
         return formatNumber(v, { type: 'currency', decimals: 2 });
       }
-      if (cellFxOf(rec, col) && !skipsColumnRule(rec, col)) return formatFormulaResult(valueOf(store, table, rec, col), col);
-      if (cellFxOf(rec, col)) return formatFormulaResult(valueOf(store, table, rec, col), col);
-      if (hasFormula(col) && !skipsColumnRule(rec, col)) return formatFormulaResult(valueOf(store, table, rec, col), col);
+      if (hasFormula(col)) return formatFormulaResult(valueOf(store, table, rec, col), col);
       const v = valueOf(store, table, rec, col);
       if (col.type === 'checkbox') return v ? 'Yes' : 'No';
       if (isLinkCol(col)) {
@@ -2188,7 +2022,6 @@
       }
       if (col.type === 'currency' || col.type === 'number' || col.type === 'percent') return formatNumber(v, col);
       if ((col.type === 'date' || col.type === 'datetime') && v) return formatDateDMY(v);
-      if (v && parseDateValue(v) && !isLinkCol(col) && col.type !== 'checkbox') return formatDateDMY(v);
       if (col.type === 'attachment') return isAttachMeta(v) ? v.name : '';
       if (isAttachMeta(v)) return v.name;
       return v == null ? '' : String(v);
@@ -2597,18 +2430,8 @@
         }
       },
       mounted() {
-        const fx = cellFxOf(this.record, this.column);
-        const ptr = cellPtrOf(this.record, this.column);
-        if (fx) {
-          this.buffer = '=' + fx;
-        } else if (ptr) {
-          this.buffer = '=' + ptr;
-        } else if (hasFormula(this.column) && !cellOwnOf(this.record, this.column) && !formulaUsesTypedValue(this.column)) {
-          this.buffer = '=' + String(this.column.formula.expression || '').trim();
-        } else {
-          const v = rawStored(this.record, this.column);
-          if (this.column.type !== 'checkbox') this.buffer = this.toBuffer(v);
-        }
+        const v = rawStored(this.record, this.column);
+        if (this.column.type !== 'checkbox') this.buffer = this.toBuffer(v);
         if (this.isKeySelfLink && this.linkedTable) {
           const matchCol = findColumn(this.linkedTable, this.column.link.matchColumnId);
           const linked = this.linkedTable.records.find((r) => r.id === v);
@@ -2887,8 +2710,6 @@
           selectingDrag: false,
           selectMode: 'cells',
           ctxMenu: { open: false, x: 0, y: 0, kind: 'cell' },
-          pointPick: null,
-          lookupFrom: { open: false, recId: '', colId: '', tableId: '', matchColumnId: '', fieldColumnId: '', keyAddr: '' },
           formulaRel: { colName: 'This', offset: -1 },
           editing: { recId: null, colId: null },
           search: '',
@@ -3004,15 +2825,10 @@
             { id: 'fill', label: 'Fill down', disabled: cells.length < 2 },
             { sep: true },
             { id: 'cellrule', label: 'Set type / rule for this cell…', disabled: cells.length !== 1 },
-            { id: 'above', label: 'Look at the cell above (this cell only)', disabled: cells.length !== 1 },
-            { id: 'lookupabove', label: 'Look this up using the cell above…', disabled: cells.length !== 1 },
-            { id: 'point', label: 'Look at another cell…', disabled: cells.length !== 1 },
-            { id: 'own', label: 'Type in this cell (ignore column rule)', disabled: cells.length !== 1 },
-            { id: 'colrule', label: 'Use the column rule again', disabled: cells.length !== 1 || !this.hasCellOverride(cells[0].rec, cells[0].col) },
+            { id: 'colrule', label: 'Use the column type again', disabled: cells.length !== 1 || !this.hasCellOverride(cells[0].rec, cells[0].col) },
             { sep: true },
             { id: 'clear', label: 'Clear cells', kbd: 'Del', disabled: !hasSel },
-            { id: 'insert', label: 'Insert row below (column rules)', disabled: !this.canAddRows },
-            { id: 'insertown', label: 'Insert row below (own rules)', disabled: !this.canAddRows },
+            { id: 'insert', label: 'Insert row below', disabled: !this.canAddRows },
             { sep: true },
             { id: 'selrow', label: nRows > 1 ? 'Select these rows' : 'Select row' },
             { id: 'selcol', label: nCols > 1 ? 'Select these columns' : 'Select column', disabled: !this.selectedCell.colId && !cells.length },
@@ -3020,7 +2836,6 @@
           ];
           if (nRows === 1) {
             const rec = rows[0];
-            items.push({ id: 'rowown', label: rec.rowOwn ? 'This row: use column rules again' : 'This row: own rules (not the column)' });
             items.push({ id: 'lock', label: rec.locked ? 'Unlock row' : 'Lock row' });
           }
           if (this.mode === 'architect' && nRows) items.push({ id: 'hide', label: 'Hide ' + rowWord });
@@ -3105,10 +2920,6 @@
           const link = t && t.columns.find((c) => c.id === (this.colEditor.draft.lookup && this.colEditor.draft.lookup.linkColumnId));
           const rt = link && findTable(this.store, link.link && link.link.tableId);
           return rt ? rt.columns : [];
-        },
-        lookupFromColumns() {
-          const t = findTable(this.store, this.lookupFrom.tableId);
-          return t ? t.columns.filter((c) => !['rollup', 'formula'].includes(c.type)) : [];
         },
         rollupLinkColumns() {
           const t = findTable(this.store, this.colEditor.draft.rollup && this.colEditor.draft.rollup.childTableId);
@@ -3198,15 +3009,13 @@
           const i = t.records.findIndex((r) => r.id === rec.id);
           return i < 0 ? '' : i + 1;
         },
-        cellPtr(rec, col) { return cellPtrOf(rec, col); },
-        cellFx(rec, col) { return cellFxOf(rec, col); },
         effectiveCol(rec, col) { return effectiveColumn(rec, col); },
         cellRuleType(rec, col) {
           const r = cellRuleOf(rec, col);
           return r && r.type ? r.type : '';
         },
         hasCellOverride(rec, col) {
-          return !!(cellOwnOf(rec, col) || cellFxOf(rec, col) || cellPtrOf(rec, col) || cellRuleOf(rec, col) || rowUsesOwnRules(rec));
+          return !!cellRuleOf(rec, col);
         },
         openCellRule() {
           const t = this.currentTable;
@@ -3254,9 +3063,6 @@
             min: d.min,
             max: d.max
           };
-          if (rec.ptr) delete rec.ptr[col.id];
-          if (rec.fx) delete rec.fx[col.id];
-          if (rec.own) delete rec.own[col.id];
           rec.updatedAt = nowIso();
           this.colEditor.open = false;
           this.toast('This cell is ' + d.type + '. The column stays ' + col.type + ' on other rows.');
@@ -3269,154 +3075,11 @@
           this.colEditor.open = false;
           this.toast('This cell uses the column type again.');
         },
-        toggleRowOwn(rec) {
-          if (!rec) return;
-          rec.rowOwn = !rec.rowOwn;
-          rec.updatedAt = nowIso();
-          this.toast(rec.rowOwn
-            ? 'This row does not follow column rules. Right-click a cell → Set a rule for this cell.'
-            : 'This row uses column rules again.');
-        },
-        lookAtCellAbove() {
-          const t = this.currentTable;
-          const rec = this.selectedRecord;
-          const col = t && findColumn(t, this.selectedCell && this.selectedCell.colId);
-          if (!t || !rec || !col) return this.toast('Click the cell in the row under the date (or value) first.', 'warn');
-          const i = t.records.findIndex((r) => r.id === rec.id);
-          if (i < 1) return this.toast('There is no row above this one.');
-          const above = t.records[i - 1];
-          this.setCellPtr(rec, col, a1Of(t, above, col));
-        },
-        cellAboveAddr() {
-          const t = this.currentTable;
-          const rec = this.selectedRecord;
-          const col = t && findColumn(t, this.selectedCell && this.selectedCell.colId);
-          if (!t || !rec || !col) return '';
-          const i = t.records.findIndex((r) => r.id === rec.id);
-          if (i < 1) return '';
-          return a1Of(t, t.records[i - 1], col);
-        },
-        openLookupFromAbove() {
-          const t = this.currentTable;
-          const rec = this.selectedRecord;
-          const col = t && findColumn(t, this.selectedCell && this.selectedCell.colId);
-          if (!t || !rec || !col) return this.toast('Click the cell that should look up, then try again.', 'warn');
-          const addr = this.cellAboveAddr();
-          if (!addr) return this.toast('There is no row above this one.');
-          const pick = this.store.tables.find((x) => x.name === 'Products') || this.store.tables.find((x) => x.id !== t.id) || t;
-          const cols = pick.columns || [];
-          this.lookupFrom = {
-            open: true,
-            recId: rec.id,
-            colId: col.id,
-            tableId: pick.id,
-            matchColumnId: cols[0] ? cols[0].id : '',
-            fieldColumnId: (cols[1] || cols[0] || {}).id || '',
-            keyAddr: addr
-          };
-        },
-        onLookupFromTableChange() {
-          const cols = this.lookupFromColumns;
-          this.lookupFrom.matchColumnId = cols[0] ? cols[0].id : '';
-          this.lookupFrom.fieldColumnId = (cols[1] || cols[0] || {}).id || '';
-        },
-        saveLookupFromAbove() {
-          const t = this.currentTable;
-          const rec = t && t.records.find((r) => r.id === this.lookupFrom.recId);
-          const col = t && findColumn(t, this.lookupFrom.colId);
-          const src = findTable(this.store, this.lookupFrom.tableId);
-          const match = src && findColumn(src, this.lookupFrom.matchColumnId);
-          const field = src && findColumn(src, this.lookupFrom.fieldColumnId);
-          if (!rec || !col || !src || !match || !field) return this.toast('Pick a sheet and two columns.', 'warn');
-          const q = (s) => String(s).replace(/"/g, '');
-          const expr = 'XLOOKUP(' + this.lookupFrom.keyAddr + ', "' + q(src.name) + '", "' + q(match.name) + '", "' + q(field.name) + '")';
-          this.setCellFx(rec, col, expr);
-          this.lookupFrom.open = false;
-        },
-        setCellFx(rec, col, expr, quiet) {
-          if (rec.locked) { if (!quiet) this.toast('This row is locked.'); return false; }
-          const e = String(expr || '').replace(/^=+/, '').trim();
-          if (!e) return false;
-          if (rec.ptr) delete rec.ptr[col.id];
-          if (rec.own) delete rec.own[col.id];
-          if (!rec.fx) rec.fx = {};
-          rec.fx[col.id] = e;
-          if (rec.followCol) delete rec.followCol[col.id];
-          rec.updatedAt = nowIso();
-          if (!quiet) this.toast('This cell has its own formula. Other rows keep the column.');
-          return true;
-        },
-        setCellOwn(rec, col, quiet) {
-          if (!rec || !col) return false;
-          if (rec.locked) { if (!quiet) this.toast('This row is locked.'); return false; }
-          if (rec.ptr) delete rec.ptr[col.id];
-          if (rec.fx) delete rec.fx[col.id];
-          if (!rec.own) rec.own = {};
-          rec.own[col.id] = true;
-          if (rec.followCol) delete rec.followCol[col.id];
-          rec.updatedAt = nowIso();
-          if (!quiet) {
-            this.toast('This cell is typed. The column rule is off here only.');
-            this.beginEdit(rec, col);
-          }
-          return true;
-        },
         useColumnRule(rec, col) {
           if (!rec || !col) return;
-          if (rec.ptr) delete rec.ptr[col.id];
-          if (rec.fx) delete rec.fx[col.id];
-          if (rec.own) delete rec.own[col.id];
           if (rec.rule) delete rec.rule[col.id];
-          if (rec.rowOwn) {
-            if (!rec.followCol) rec.followCol = {};
-            rec.followCol[col.id] = true;
-          }
           rec.updatedAt = nowIso();
-          this.toast('This cell uses the column rule again.');
-        },
-        startPointPick() {
-          const rec = this.selectedRecord;
-          const col = this.currentTable && findColumn(this.currentTable, this.selectedCell.colId);
-          if (!rec || !col) return this.toast('Click the cell that should show the other value, then try again.', 'warn');
-          this.pointPick = { recId: rec.id, colId: col.id };
-          this.toast('Now click the cell to copy.');
-        },
-        finishPointPick(srcRec, srcCol) {
-          const t = this.currentTable;
-          const destRec = t && t.records.find((r) => r.id === this.pointPick.recId);
-          const destCol = t && findColumn(t, this.pointPick.colId);
-          this.pointPick = null;
-          if (!destRec || !destCol || !srcRec || !srcCol) return;
-          if (destRec.id === srcRec.id && destCol.id === srcCol.id) return this.toast('Pick a different cell.', 'warn');
-          const addr = a1Of(t, srcRec, srcCol);
-          this.setCellPtr(destRec, destCol, addr);
-        },
-        setCellPtr(rec, col, addr, quiet) {
-          if (rec.locked) { if (!quiet) this.toast('This row is locked.'); return false; }
-          if (!rec.ptr) rec.ptr = {};
-          const p = String(addr || '').replace(/^=+/, '').trim();
-          if (!p) { delete rec.ptr[col.id]; return true; }
-          if (!parseA1(p)) { if (!quiet) this.toast('Use an address like B2 or Customers!B2.', 'warn'); return false; }
-          rec.ptr[col.id] = p.toUpperCase().replace(/!/, '!');
-          if (rec.fx) delete rec.fx[col.id];
-          if (rec.own) delete rec.own[col.id];
-          if (rec.followCol) delete rec.followCol[col.id];
-          rec.updatedAt = nowIso();
-          if (!quiet) this.toast('This cell follows ' + rec.ptr[col.id] + '. Other rows in this column stay as they are.');
-          return true;
-        },
-        clearCellPtr(rec, col) {
-          if (rec && rec.ptr) delete rec.ptr[col.id];
-          this.toast('This cell is independent again.');
-        },
-        filterToThisCell() {
-          const rec = this.selectedRecord;
-          const col = this.currentTable && findColumn(this.currentTable, this.selectedCell.colId);
-          if (!rec || !col) return;
-          const value = String(this.displayValue(rec, col) || '').trim();
-          if (!value) return this.toast('That cell is empty.', 'warn');
-          this.currentTable.rowFilter = { columnId: col.id, value };
-          this.toast('Only rows where ' + col.name + ' is like “' + value + '”. Click the gold chip to show all.');
+          this.toast('This cell uses the column type again.');
         },
         clearSheetFilter() {
           if (this.currentTable) this.currentTable.rowFilter = null;
@@ -3438,16 +3101,8 @@
           if (this.isKeyLink(col) && col.link.keyColumnId) return true;
           return false;
         },
-        cellHardLocked(rec, col) {
-          if (!col) return false;
-          const use = effectiveColumn(rec, col);
-          if (use.type === 'rollup' || use.type === 'autonumber') return true;
-          if (cellFxOf(rec, col) || cellPtrOf(rec, col) || cellOwnOf(rec, col) || cellRuleOf(rec, col) || skipsColumnRule(rec, col)) return false;
-          if (this.isKeyLink(use) && use.link && use.link.keyColumnId) return true;
-          return false;
-        },
         isComputedCell(rec, col) {
-          return this.cellHardLocked(rec, col);
+          return this.isComputed(this.effectiveCol(rec, col));
         },
         typeShort(t) {
           return ({ text: 'txt', longtext: 'note', number: 'num', currency: '$', percent: '%', date: 'date', datetime: 'time', select: 'sel', checkbox: 'chk', email: 'mail', phone: 'tel', url: 'url', attachment: 'file', autonumber: 'auto', link: 'link', search: 'find', lookup: 'lkp', formula: 'fx', rollup: 'sum' })[t] || t;
@@ -3459,10 +3114,6 @@
         cellTitle(rec, col) {
           const ch = this.cellChange(rec, col);
           if (ch) return 'Was ' + (ch.before || 'blank') + ' → ' + (ch.after || 'blank');
-          const fx = cellFxOf(rec, col);
-          if (fx) return fx;
-          const ptr = cellPtrOf(rec, col);
-          if (ptr) return 'Shows ' + ptr;
           if (hasFormula(col) && formulaUsesTypedValue(col)) {
             const raw = rawStored(rec, col);
             const rawText = (col.type === 'date' || col.type === 'datetime') ? formatDateDMY(raw) : String(raw ?? '');
@@ -3846,7 +3497,7 @@
           return {
             name: '', type: type || 'text', required: false, unique: false, hidden: false, description: '', width: 160,
             options: [], decimals: 2, min: null, max: null, prefix: '', pad: 4, seq: 0,
-            link: { tableId: '', displayColumnId: '', mode: 'pick', matchColumnId: '', keyColumnId: '', keyName: '', notFound: 'blank', searchColumnId: '', searchScope: 'row' },
+            link: { tableId: '', displayColumnId: '', mode: 'pick', matchColumnId: '', keyColumnId: '', notFound: 'blank', searchColumnId: '', searchScope: 'row' },
             lookup: { linkColumnId: '', fieldColumnId: '' },
             formula: { expression: '', resultType: 'auto' },
             rollup: { childTableId: '', linkColumnId: '', aggregate: 'count', valueColumnId: '' },
@@ -3856,10 +3507,9 @@
         openColumnEditor(col) {
           if (this.mode !== 'architect') return;
           const draft = col ? clone(Object.assign(this.blankColumn(col.type), col)) : this.blankColumn('text');
-          if (!draft.link) draft.link = { tableId: '', displayColumnId: '', mode: 'pick', matchColumnId: '', keyColumnId: '', keyName: '', notFound: 'blank', searchColumnId: '', searchScope: 'row' };
+          if (!draft.link) draft.link = { tableId: '', displayColumnId: '', mode: 'pick', matchColumnId: '', keyColumnId: '', notFound: 'blank', searchColumnId: '', searchScope: 'row' };
           if (!draft.link.mode) draft.link.mode = 'pick';
           if (draft.link.keyColumnId == null) draft.link.keyColumnId = '';
-          if (draft.link.keyName == null) draft.link.keyName = '';
           if (!draft.link.notFound) draft.link.notFound = 'blank';
           if (!draft.link.searchScope) draft.link.searchScope = 'row';
           if (draft.link.searchColumnId == null) draft.link.searchColumnId = '';
@@ -3947,9 +3597,9 @@
           this.audit('column.delete', t.name + '.' + d.name, '');
           this.colEditor.open = false;
         },
-        blankRecord(ownRules) {
+        blankRecord() {
           const t = this.currentTable;
-          const rec = { id: uid('rec'), createdAt: nowIso(), updatedAt: nowIso(), data: {}, audit: [], locked: false, rowOwn: !!ownRules };
+          const rec = { id: uid('rec'), createdAt: nowIso(), updatedAt: nowIso(), data: {}, audit: [], locked: false };
           t.columns.forEach((col) => {
             if (col.type === 'checkbox') rec.data[col.id] = false;
             else if (col.type === 'autonumber') {
@@ -3961,24 +3611,23 @@
           });
           return rec;
         },
-        addRecord(ownRules) {
+        addRecord() {
           const t = this.currentTable;
           if (!t) return;
           if (!t.columns.length) {
             if (this.mode === 'architect') return this.toast('Add a column before you add a row.', 'warn');
             return this.toast('This sheet has no columns yet, so rows cannot be added.', 'warn');
           }
-          const rec = this.blankRecord(ownRules);
+          const rec = this.blankRecord();
           t.records.push(rec);
           this.selectedRecordId = rec.id;
           this.view = this.splitOpen ? 'form' : this.view;
           this.audit('record.create', t.name, rec.id);
-          if (ownRules) this.toast('Row added with its own rules. Column rules stay the default for other rows.');
         },
-        insertRowBelow(ownRules) {
+        insertRowBelow() {
           const t = this.currentTable;
           if (!t || !this.canAddRows) return this.toast('Add a column before you add a row.', 'warn');
-          const rec = this.blankRecord(ownRules);
+          const rec = this.blankRecord();
           const after = this.selectedRecords[this.selectedRecords.length - 1];
           const idx = after ? t.records.findIndex((r) => r.id === after.id) + 1 : t.records.length;
           t.records.splice(idx < 0 ? t.records.length : idx, 0, rec);
@@ -3987,18 +3636,14 @@
           else this.selectedRecordId = rec.id;
           this.selectMode = 'rows';
           this.audit('record.create', t.name, rec.id);
-          this.toast(ownRules ? 'Row inserted with its own rules.' : 'Row inserted (column rules).');
+          this.toast('Row inserted.');
         },
         duplicateSelectedRows() {
           const t = this.currentTable;
           const recs = this.selectedRecords;
           if (!t || !recs.length) return this.toast('Select a row first — click a row number, or right-click Duplicate.', 'warn');
           const clones = recs.map((src) => {
-            const rec = { id: uid('rec'), createdAt: nowIso(), updatedAt: nowIso(), data: clone(src.data || {}), audit: [], locked: false, rowOwn: !!src.rowOwn };
-            if (src.fx) rec.fx = clone(src.fx);
-            if (src.ptr) rec.ptr = clone(src.ptr);
-            if (src.own) rec.own = clone(src.own);
-            if (src.followCol) rec.followCol = clone(src.followCol);
+            const rec = { id: uid('rec'), createdAt: nowIso(), updatedAt: nowIso(), data: clone(src.data || {}), audit: [], locked: false };
             if (src.rule) rec.rule = clone(src.rule);
             t.columns.forEach((col) => {
               if (col.type === 'autonumber') {
@@ -4157,21 +3802,12 @@
           else if (id === 'duplicate') this.duplicateSelectedRows();
           else if (id === 'fill') this.fillDownSelection();
           else if (id === 'cellrule') this.openCellRule();
-          else if (id === 'above') this.lookAtCellAbove();
-          else if (id === 'lookupabove') this.openLookupFromAbove();
-          else if (id === 'point') this.startPointPick();
-          else if (id === 'own') {
-            const c = this.selectedCellEntries()[0];
-            if (c) this.setCellOwn(c.rec, c.col);
-          }
           else if (id === 'colrule') {
             const c = this.selectedCellEntries()[0];
             if (c) this.useColumnRule(c.rec, c.col);
           }
           else if (id === 'clear') this.clearSelectedCells();
-          else if (id === 'insert') this.insertRowBelow(false);
-          else if (id === 'insertown') this.insertRowBelow(true);
-          else if (id === 'rowown' && this.selectedRecords[0]) this.toggleRowOwn(this.selectedRecords[0]);
+          else if (id === 'insert') this.insertRowBelow();
           else if (id === 'selrow') this.selectCurrentRows();
           else if (id === 'selcol') this.selectCurrentColumns();
           else if (id === 'selall') this.selectAll();
@@ -4182,11 +3818,6 @@
         onCellMouseDown(e, rec, col) {
           if (e.button !== 0) return;
           if (e.detail > 1) return;
-          if (this.pointPick) {
-            e.preventDefault();
-            this.finishPointPick(rec, col);
-            return;
-          }
           this.closeCtxMenu();
           this.selectMode = 'cells';
           this.selectCell(rec, col, e);
@@ -4297,11 +3928,11 @@
         },
         beginEdit(rec, col) {
           if (rec && rec.locked) return this.toast('This row is locked. Uncheck the lock to edit.');
-          if (this.cellHardLocked(rec, col)) {
+          if (this.isComputedCell(rec, col)) {
             if (col.type === 'autonumber') this.toast('Autonumber is assigned when the row is created.');
             else if (this.isKeyLink(col)) this.toast('This link is filled by XLOOKUP. Type the key in ' + this.keySourceLabel(col) + '.');
             else if (col.type === 'rollup') this.toast('This cell is a rollup from another sheet.');
-            else this.toast('This cell is calculated.');
+            else this.toast('This formula is calculated from other columns.');
             return;
           }
           this.selectedRecordId = rec.id;
@@ -4313,27 +3944,7 @@
         onFormCommit(payload) { this.commitPayload(payload); },
         commitPayload(payload) {
           if (!payload) return;
-          const v = payload.value;
-          if (typeof v === 'string' && /^\s*=/.test(v)) {
-            const expr = v.replace(/^=+/, '').trim();
-            if (parseA1(expr) && !/[(),]/.test(expr)) {
-              this.setCellPtr(payload.record, payload.column, expr);
-              return;
-            }
-            this.setCellFx(payload.record, payload.column, expr);
-            return;
-          }
-          if (payload.record && payload.record.ptr) delete payload.record.ptr[payload.column.id];
-          if (payload.record && payload.record.fx) delete payload.record.fx[payload.column.id];
-          this.setCell(payload.record, payload.column, v);
-        },
-        coerceTypedValue(col, value) {
-          if (value == null || value === '' || typeof value === 'boolean' || typeof value === 'number') return value;
-          if (!col || ['link', 'search', 'select', 'checkbox', 'attachment', 'autonumber', 'rollup', 'lookup', 'number', 'currency', 'percent', 'email', 'phone', 'url'].includes(col.type)) return value;
-          if (typeof value === 'string' && /^\s*=/.test(value)) return value;
-          const d = parseDateValue(value);
-          if (d) return d.toISOString().slice(0, 10);
-          return value;
+          this.setCell(payload.record, payload.column, payload.value);
         },
         applyCellRule(rec, col, spec, dR, dC, quiet) {
           if (!rec || !col || rec.locked) return false;
@@ -4344,30 +3955,9 @@
             if (rec.rule[col.id].formula && rec.rule[col.id].formula.expression) {
               rec.rule[col.id].formula.expression = shiftA1InText(rec.rule[col.id].formula.expression, dR, dC);
             }
-          }
-          const fx = shiftA1InText(spec && spec.fx, dR, dC);
-          const ptr = shiftA1InText(spec && spec.ptr, dR, dC);
-          if (fx) return this.setCellFx(rec, col, fx, true);
-          if (ptr) return this.setCellPtr(rec, col, ptr, true);
-          if (spec && spec.rule) {
             rec.data[col.id] = spec.data;
             rec.updatedAt = nowIso();
             return true;
-          }
-          if (spec && spec.follow) {
-            if (rec.ptr) delete rec.ptr[col.id];
-            if (rec.fx) delete rec.fx[col.id];
-            if (rec.own) delete rec.own[col.id];
-            if (rec.rowOwn) {
-              if (!rec.followCol) rec.followCol = {};
-              rec.followCol[col.id] = true;
-            }
-            rec.updatedAt = nowIso();
-            return true;
-          }
-          if (spec && spec.own) {
-            rec.data[col.id] = spec.data;
-            return this.setCellOwn(rec, col, true);
           }
           return this.setCell(rec, col, spec ? spec.data : null, true);
         },
@@ -4394,7 +3984,6 @@
             selectMode: this.selectMode,
             origin: { row: originRec, col: originCol },
             wholeRows: !!wholeRows && ccols.length === t.columns.filter((c) => !c.hidden).length,
-            rowOwn: recs.map((r) => !!r.rowOwn),
             grid: recs.map((rec) => ccols.map((col) => snapshotCellRule(rec, col))),
             columns: wholeCols ? ccols.map((c) => ({
               name: c.name,
@@ -4423,7 +4012,6 @@
           payload.grid.forEach((row, i) => {
             const rec = destRecs[i];
             if (!rec) { skip += row.length; return; }
-            if (payload.wholeRows && payload.rowOwn[i]) rec.rowOwn = true;
             const srcRi = payload.origin.row + i;
             const destRi = t.records.findIndex((r) => r.id === rec.id);
             row.forEach((spec, j) => {
@@ -4451,18 +4039,7 @@
             if (col.min != null && Number(value) < col.min) { if (!quiet) this.toast(col.name + ' is below minimum.', 'error'); return false; }
             if (col.max != null && Number(value) > col.max) { if (!quiet) this.toast(col.name + ' is above maximum.', 'error'); return false; }
           }
-          value = this.coerceTypedValue(col, value);
           rec.data[col.id] = value;
-          if (rec.ptr) delete rec.ptr[col.id];
-          if (rec.fx) delete rec.fx[col.id];
-          if (parseDateValue(value) && col.type !== 'date' && col.type !== 'datetime' && !['number', 'currency', 'percent'].includes(col.type)) {
-            if (!rec.rule) rec.rule = {};
-            rec.rule[col.id] = Object.assign({}, rec.rule[col.id] || {}, { type: 'date' });
-          }
-          if (columnLocksTypedValue(col) || hasFormula(col) || col.type === 'lookup' || col.type === 'formula') {
-            if (!rec.own) rec.own = {};
-            rec.own[col.id] = true;
-          }
           rec.updatedAt = nowIso();
           if (isLinkCol(col) && (!col.link || col.link.mode !== 'key')) this.applyAutofill(t, rec, col, value);
           this.applyKeyLookups(t, rec, col);
@@ -4873,12 +4450,6 @@
           if (this.docReaderOpen && e.key === 'Escape') {
             e.preventDefault();
             this.closeDocReader();
-            return;
-          }
-          if (this.pointPick && e.key === 'Escape') {
-            e.preventDefault();
-            this.pointPick = null;
-            this.toast('Cancelled.');
             return;
           }
           if (this.ctxMenu.open && e.key === 'Escape') {
@@ -5296,47 +4867,6 @@
           if (shiftA1InText('XLOOKUP(C1, "Products", "Item No", "Name")', 1, 0) !== 'XLOOKUP(C2, "Products", "Item No", "Name")') console.warn('shift formula A1 failed');
           const clip = parseClipboardGrid('10\tHeat-treated\n4\tSame-day');
           if (clip.length !== 2 || clip[0][0] !== '10' || clip[1][1] !== 'Same-day') console.warn('clipboard grid parse failed', clip);
-          const ws = sampleWorkspace('Ptr');
-          const cust = ws.tables.find((t) => t.name === 'Customers');
-          const nameCol = cust.columns.find((c) => c.name === 'Name');
-          const cityCol = cust.columns.find((c) => c.name === 'City');
-          cust.records[0].ptr = {};
-          cust.records[0].ptr[cityCol.id] = a1Of(cust, cust.records[0], nameCol);
-          const shown = formatDisplay(ws, cust, cust.records[0], cityCol);
-          if (shown !== 'Acme Industrial') console.warn('cell pointer failed', shown, a1Of(cust, cust.records[0], nameCol));
-          const lu = sampleWorkspace('Lu');
-          const items = lu.tables.find((t) => t.name === 'Line Items');
-          const tot = items.columns.find((c) => c.name === 'Line Total');
-          const itemNo = items.columns.find((c) => c.name === 'Item No');
-          const row0Tot = formatDisplay(lu, items, items.records[0], tot);
-          items.records[1].own = {};
-          items.records[1].own[tot.id] = true;
-          items.records[1].data[tot.id] = 99;
-          const typed = formatDisplay(lu, items, items.records[1], tot);
-          if (typed.indexOf('99') < 0) console.warn('cell own failed to skip column formula', typed, row0Tot);
-          if (formatDisplay(lu, items, items.records[0], tot) !== row0Tot) console.warn('column formula should still run on other rows');
-          delete items.records[1].own;
-          items.records[1].fx = {};
-          items.records[1].fx[tot.id] = 'XLOOKUP(' + a1Of(items, items.records[0], itemNo) + ', "Products", "Item No", "Name")';
-          const looked = formatDisplay(lu, items, items.records[1], tot);
-          if (looked !== 'Widget A') console.warn('cell lookup from A1 failed', looked, items.records[1].fx[tot.id]);
-          const free = sampleWorkspace('Free');
-          const li2 = free.tables.find((t) => t.name === 'Line Items');
-          const tot2 = li2.columns.find((c) => c.name === 'Line Total');
-          const colTot = formatDisplay(free, li2, li2.records[0], tot2);
-          li2.records[0].rowOwn = true;
-          li2.records[0].data[tot2.id] = 7;
-          const ownTot = formatDisplay(free, li2, li2.records[0], tot2);
-          if (String(ownTot).indexOf('7') < 0) console.warn('row own rules failed', ownTot, colTot);
-          if (formatDisplay(free, li2, li2.records[1], tot2) === ownTot && colTot !== ownTot) { /* other row still column */ }
-            else if (li2.records[1] && formatDisplay(free, li2, li2.records[1], tot2) === colTot) { /* ok */ }
-          const copySrc = { data: {}, fx: { [tot2.id]: 'XLOOKUP(C1, "Products", "Item No", "Name")' } };
-          const spec = snapshotCellRule(copySrc, tot2);
-          const dest = li2.records[2] || li2.records[1];
-          dest.fx = {};
-          const shifted = shiftA1InText(spec.fx, 1, 0);
-          dest.fx[tot2.id] = shifted;
-          if (shifted.indexOf('C2') < 0) console.warn('copied rule did not shift', shifted);
           const typeWs = sampleWorkspace('TypeRule');
           const cust2 = typeWs.tables.find((x) => x.name === 'Customers');
           const city2 = cust2.columns.find((c) => c.name === 'City');
@@ -5346,23 +4876,10 @@
           const asNum = formatDisplay(typeWs, cust2, cust2.records[0], city2);
           if (String(asNum).indexOf('15') < 0) console.warn('cell type rule failed', asNum);
           if (formatDisplay(typeWs, cust2, cust2.records[1], city2) === asNum) console.warn('cell type should not leak to other rows');
-          const excel = sampleWorkspace('ExcelCells');
-          const ords = excel.tables.find((t) => t.name === 'Orders');
-          const follow = ords.columns.find((c) => c.name === 'Follow-up');
-          const orderDate = ords.columns.find((c) => c.name === 'Order Date');
-          const colFollow = formatDisplay(excel, ords, ords.records[1], follow);
-          ords.records[0].own = {};
-          ords.records[0].own[follow.id] = true;
-          ords.records[0].data[follow.id] = '2026-12-25';
-          const dateCell = formatDisplay(excel, ords, ords.records[0], follow);
-          if (dateCell !== '25/12/2026') console.warn('typed date over formula cell failed', dateCell);
-          if (formatDisplay(excel, ords, ords.records[1], follow) !== colFollow) console.warn('other row should keep column formula', formatDisplay(excel, ords, ords.records[1], follow), colFollow);
-          ords.records[1].ptr = {};
-          ords.records[1].ptr[follow.id] = a1Of(ords, ords.records[0], follow);
-          const fromRef = formatDisplay(excel, ords, ords.records[1], follow);
-          if (fromRef !== '25/12/2026') console.warn('cell as date ref failed', fromRef);
-          const fromOrder = formatDisplay(excel, ords, ords.records[0], orderDate);
-          if (!parseDateValue(fromOrder) && fromOrder.indexOf('/') < 0) console.warn('order date should be a date', fromOrder);
+          const spec = snapshotCellRule(cust2.records[0], city2);
+          spec.rule.formula = { expression: 'XLOOKUP(C1, "Products", "Item No", "Name")', resultType: 'auto' };
+          const shifted = shiftA1InText(spec.rule.formula.expression, 1, 0);
+          if (shifted.indexOf('C2') < 0) console.warn('copied cell rule did not shift', shifted);
         },
         onPaste(e) {
           const target = e.target;
