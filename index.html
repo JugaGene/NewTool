@@ -113,7 +113,24 @@
     @keyframes toastIn { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
     input[type="date"]::-webkit-calendar-picker-indicator,
     input[type="datetime-local"]::-webkit-calendar-picker-indicator { filter: invert(1); }
+    .forge-sheet { position: relative; min-height: 0; }
+    .forge-sheet .jexcel_container, .forge-sheet .jexcel_content { height: 100% !important; }
+    .forge-sheet .jexcel { font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; color: #d7e0f2; background: #0b1220; border-color: #223250; }
+    .forge-sheet .jexcel > thead > tr > td, .forge-sheet .jexcel > tbody > tr > td.jexcel_row {
+      background: #152038; color: #8ea0be; border-color: #223250; font-weight: 600;
+    }
+    .forge-sheet.architect .jexcel > thead > tr > td { color: #f5b942; }
+    .forge-sheet .jexcel > tbody > tr > td { background: #0b1220; color: #d7e0f2; border-color: #223250; }
+    .forge-sheet .jexcel > tbody > tr > td.readonly { color: #8ea0be; }
+    .forge-sheet .jexcel > tbody > tr.selected > td, .forge-sheet .jexcel > tbody > tr > td.highlight {
+      background: rgba(62, 207, 190, 0.16);
+    }
+    .forge-sheet .jexcel_corner { background: #3ecfbe; }
+    .forge-sheet .jexcel_toolbar, .forge-sheet .jexcel_pagination, .forge-sheet .jexcel_filter { display: none !important; }
+    .jexcel_contextmenu, .jcontextmenu { background: #10192c !important; border: 1px solid #2a3b5c !important; color: #d7e0f2 !important; }
   </style>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsuites@5.9.0/dist/jsuites.min.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jspreadsheet-ce@4.15.0/dist/jspreadsheet.min.css" />
 </head>
 <body class="font-sans text-mist antialiased">
   <div id="app" v-cloak class="h-full">
@@ -121,7 +138,7 @@
     <div v-if="cdnError" class="h-full grid place-items-center p-8 text-center">
       <div class="max-w-md">
         <h1 class="text-2xl font-semibold mb-2">ForgeGrid needs an internet connection for this prototype</h1>
-        <p class="text-mute">Vue, Tailwind, and SheetJS load from CDNs. Reconnect and refresh this file in Chrome.</p>
+        <p class="text-mute">Vue, Tailwind, the sheet canvas, and SheetJS load from CDNs. Reconnect and refresh this file in Chrome.</p>
       </div>
     </div>
 
@@ -441,7 +458,7 @@
             </div>
 
             <!-- GRID -->
-            <div v-if="view==='grid'" class="flex-1 min-h-0 grid-scroll" tabindex="0" @keydown="onGridKey" @contextmenu.prevent="openCtxMenu($event, 'corner')">
+            <div v-if="view==='grid'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
               <div v-if="!visibleColumns.length" class="h-full grid place-items-center text-mute text-sm p-8 text-center">
                 <div v-if="currentTable.columns.length">
                   All columns are hidden.
@@ -455,107 +472,7 @@
                   <button v-if="mode==='architect'" class="mt-3 ml-2 rounded-lg border border-line px-3 py-1.5" @click="pasteFromClipboard">Paste from Excel</button>
                 </div>
               </div>
-              <table v-else class="data-grid text-[13px]" :class="[selectingDrag && 'selecting', colMoving && 'moving-col', fillDrag && 'filling']" :style="{ width: gridTableWidth + 'px', minWidth: gridTableWidth + 'px', maxWidth: gridTableWidth + 'px' }">
-                <colgroup>
-                  <col :style="{ width: rowHeadWidth + 'px' }" />
-                  <col v-for="col in visibleColumns" :key="col.id" :style="{ width: (col.width || 160) + 'px' }" />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th class="sticky-col text-center text-mute font-medium relative px-0.5 cursor-pointer"
-                      :class="selectMode==='all' && 'col-sel'"
-                      :style="{ width: rowHeadWidth + 'px', minWidth: rowHeadWidth + 'px' }"
-                      title="Click to select the whole sheet. Click a row number to select that row; Shift-click or drag to select more. Right-click for copy, paste, duplicate."
-                      @mousedown="onCornerMouseDown($event)"
-                      @contextmenu.prevent="openCtxMenu($event, 'corner')">
-                      <span class="inline-flex items-center justify-center gap-0.5 text-[10px] uppercase tracking-wide">
-                        <icon name="lock" size="11"></icon>
-                        <span>#</span>
-                      </span>
-                      <span class="col-resizer" :class="colResize && colResize.head && 'active'" @mousedown.stop.prevent="startRowHeadResize($event)" @dragstart.prevent></span>
-                    </th>
-                    <th v-for="col in visibleColumns" :key="col.id"
-                      class="font-medium text-left px-2 py-2 cursor-pointer select-none"
-                      data-kind="colhead"
-                      :data-col-id="col.id"
-                      :class="[dragOverColId===col.id && 'th-drop', isColSelected(col) && 'col-sel']"
-                      :style="{ width: (col.width || 160) + 'px' }"
-                      @mousedown="onHeaderMouseDown($event, col)"
-                      @dblclick.stop="mode==='architect' && openColumnEditor(col)"
-                      @contextmenu.prevent="openCtxMenu($event, 'col', null, col)"
-                      :title="'Click to select this column. Shift-click to extend. Drag the name to move the column. Drag the right edge to resize.'">
-                      <div class="th-label">
-                        <span class="col-move" title="Drag to move this column" @mousedown.stop="onColMoveMouseDown($event, col)">
-                          <span class="text-mute shrink-0 mt-0.5"><icon name="grip" size="12" /></span>
-                          <span v-if="mode==='architect'" class="text-[10px] uppercase tracking-wide text-gold/80 font-mono shrink-0" :title="'Column ' + colLetter(col)">{{ colLetter(col) }}</span>
-                          <span class="th-name">{{ col.name }}</span>
-                        </span>
-                        <span class="text-[10px] uppercase tracking-wide text-mute shrink-0">{{ typeShort(col.type) }}</span>
-                        <span v-if="hasFormula(col)" class="text-gold font-mono text-[10px] shrink-0">fx</span>
-                        <span v-else-if="col.type==='search'" class="text-gold font-mono text-[10px] shrink-0">find</span>
-                        <span v-else-if="col.type==='lookup' || isKeyLink(col)" class="text-gold font-mono text-[10px] shrink-0">xl</span>
-                        <button type="button" class="text-mute hover:text-teal shrink-0 px-0.5" :class="sort.colId===col.id && 'text-teal'" :title="sort.colId===col.id ? (sort.dir==='asc' ? 'Sorted A→Z — click to reverse' : 'Sorted Z→A — click to reverse') : 'Sort this column'" @mousedown.stop @click.stop="toggleSort(col.id)">{{ sort.colId===col.id ? (sort.dir==='asc' ? '↑' : '↓') : '↕' }}</button>
-                        <button v-if="mode==='architect'" class="ml-auto text-mute hover:text-white shrink-0" @click.stop="toggleColumnHidden(col, true)" title="Hide column"><icon name="eye-off" size="12" /></button>
-                        <button v-if="mode==='architect'" class="text-mute hover:text-gold shrink-0" @click.stop="openColumnEditor(col)" title="Edit column"><icon name="edit" size="12" /></button>
-                      </div>
-                      <span class="col-resizer" :class="colResize && colResize.col.id===col.id && 'active'" @mousedown.stop.prevent="startColResize($event, col)" @dragstart.prevent></span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-if="!filteredRecords.length">
-                    <td :colspan="visibleColumns.length + 2" class="px-4 py-16 text-center text-mute">
-                      <div class="font-medium text-mist mb-1">{{ currentTable.records.length ? 'No rows match this filter.' : 'No rows yet.' }}</div>
-                      <p class="text-xs">Add a row, or open Documents and enter while reading the source file.</p>
-                    </td>
-                  </tr>
-                  <tr v-for="(rec, idx) in filteredRecords" :key="rec.id" :class="[isRowSelected(rec) && 'bg-teal/5', rec.hidden && 'opacity-50', rec.locked && 'row-locked']">
-                    <td class="sticky-col text-center text-mute text-[11px] cursor-pointer"
-                      data-kind="rowhead"
-                      :data-rec-id="rec.id"
-                      :class="[isRowSelected(rec) && 'rowhead-sel']"
-                      :style="{ width: rowHeadWidth + 'px', minWidth: rowHeadWidth + 'px' }"
-                      @mousedown.stop="onRowHeadMouseDown($event, rec)"
-                      @contextmenu.prevent="openCtxMenu($event, 'row', rec)">
-                      <div class="flex items-center justify-center gap-0.5 py-1 px-0.5">
-                        <button type="button" class="lock-btn shrink-0" :class="rec.locked && 'is-locked'" :title="rec.locked ? 'Unlock this row' : 'Lock this row'" @mousedown.stop @click.stop.prevent="toggleRowLock(rec)">
-                          <icon :name="rec.locked ? 'lock' : 'unlock'" size="13"></icon>
-                        </button>
-                        <span class="tabular-nums leading-none">{{ recordNumber(rec) }}</span>
-                        <button class="p-0.5 rounded hover:bg-ink-900 text-mute shrink-0" :class="(rec.audit && rec.audit.length) && 'text-gold'" title="Row history" @mousedown.stop @click.stop="openRowAudit(rec)"><icon name="clock" size="11"></icon></button>
-                        <button class="p-0.5 rounded hover:bg-ink-900 text-red-300 shrink-0" title="Delete this row" @mousedown.stop @click.stop="deleteRows([rec])"><icon name="trash" size="11"></icon></button>
-                      </div>
-                      <button v-if="rec.hidden" class="text-[11px] px-1.5 py-0.5 rounded bg-teal/20 text-teal" @click.stop="unhideRow(rec)">Unhide</button>
-                    </td>
-                    <td v-for="col in visibleColumns" :key="col.id"
-                      class="px-0 align-top"
-                      :data-rec-id="rec.id"
-                      :data-col-id="col.id"
-                      data-kind="cell"
-                      :class="[isComputedCell(rec, col) && 'locked', cellChange(rec, col) && 'changed', isFillPreview(rec, col) && 'fill-preview', isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
-                      @mousedown.stop="onCellMouseDown($event, rec, col)"
-                      @contextmenu.prevent="openCtxMenu($event, 'cell', rec, col)">
-                      <div v-if="effectiveCol(rec, col).type==='attachment'" class="px-1 py-1 min-h-[34px]" @mousedown.stop>
-                        <attach-cell :column="effectiveCol(rec, col)" :record="rec" variant="grid" :locked="!!rec.locked" @commit="onFormCommit" @open="openAttachment" />
-                      </div>
-                      <div v-else-if="editing.recId===rec.id && editing.colId===col.id" class="p-0 flex items-center">
-                        <field-input class="flex-1 min-w-0" :column="effectiveCol(rec, col)" :record="rec" :table="currentTable" :store="store" variant="grid" @commit="commitEdit" @cancel="cancelEdit" />
-                      </div>
-                      <div v-else class="px-1 py-1.5 min-h-[34px] overflow-hidden flex items-start gap-0.5" :title="cellTitle(rec, col)">
-                        <div class="min-w-0 flex-1 overflow-hidden">
-                          <div v-if="cellChange(rec, col)" class="text-[10px] text-rose-300 line-through truncate leading-tight">{{ cellChange(rec, col).before || 'blank' }}</div>
-                          <div :class="cellChange(rec, col) ? 'text-teal truncate' : 'whitespace-nowrap overflow-hidden text-ellipsis'">
-                            <cell-view :text="displayValue(rec, col)" :column="effectiveCol(rec, col)" :raw="rawValue(rec, col)" />
-                          </div>
-                        </div>
-                        <span v-if="cellFx(rec, col)" class="ptr-chip" :title="'=' + cellFx(rec, col)">fx</span>
-                        <span v-else-if="cellRuleType(rec, col)" class="ptr-chip" :title="'This cell is ' + cellRuleType(rec, col) + ' (column stays ' + col.type + ')'">{{ typeShort(cellRuleType(rec, col)) }}</span>
-                      </div>
-                      <span v-if="isFillHandleCell(rec, col)" class="fill-handle" title="Drag to fill. Then choose Copy or Fill series." @mousedown.stop.prevent="startFillDrag($event)"></span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+              <div v-else ref="sheetHost" class="forge-sheet flex-1 min-h-0" :class="mode" title="Double-click a header to edit the column. + Row adds a record. Types live in the column panel."></div>
             </div>
 
             <!-- FORM -->
@@ -1076,6 +993,9 @@
         </template>
       </div>
 
+      <div v-if="sheetEdit.open" class="fixed z-[85] rounded-lg border border-line bg-ink-850 shadow-panel p-1" :style="sheetEdit.style" @mousedown.stop>
+        <field-input :column="effectiveCol(sheetEdit.rec, sheetEdit.col)" :record="sheetEdit.rec" :table="currentTable" :store="store" variant="grid" @commit="commitSheetEdit" @cancel="sheetEdit.open=false" />
+      </div>
       <div v-if="fillMenu.open" class="ctx-menu" :style="{ left: fillMenu.x + 'px', top: fillMenu.y + 'px', minWidth: '160px' }" @mousedown.stop @click.stop>
         <button type="button" @click="chooseFill('copy')"><span>Copy cells</span></button>
         <button type="button" :disabled="!fillMenu.canSeries" @click="chooseFill('series')"><span>Fill series</span></button>
@@ -1090,6 +1010,8 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/jsuites@5.9.0/dist/jsuites.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspreadsheet-ce@4.15.0/dist/index.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script>
@@ -2841,6 +2763,7 @@
           fillMenu: { open: false, x: 0, y: 0, canSeries: false },
           fillJob: null,
           editSeed: '',
+          sheetEdit: { open: false, rec: null, col: null, style: {} },
           selectMode: 'cells',
           ctxMenu: { open: false, x: 0, y: 0, kind: 'cell' },
           formulaRel: { colName: 'This', offset: -1 },
@@ -2936,6 +2859,12 @@
             cMap
           };
         },
+        sheetBindKey() {
+          if (this.view !== 'grid' || !this.currentTable) return '';
+          const cols = this.visibleColumns.map((c) => c.id + ':' + c.name + ':' + (c.width || 160) + ':' + c.type).join(',');
+          const rows = this.filteredRecords.map((r) => r.id).join(',');
+          return [this.currentTable.id, this.mode, cols, rows, this.sort.colId, this.sort.dir, this.search, this.showHiddenRows].join('|');
+        },
         canAddRows() { return !!(this.currentTable && this.currentTable.columns.length); },
         workspacePanelOpen() {
           if (this.windowWidth < 768) return this.sidebarOpen;
@@ -2989,10 +2918,12 @@
           const hasSel = cells.length > 0;
           const items = [
             { id: 'copy', label: hasSel ? 'Copy' : 'Copy', kbd: 'Ctrl+C', disabled: !hasSel },
-            { id: 'paste', label: 'Paste', kbd: 'Ctrl+V', disabled: !this.visibleColumns.length },
+            { id: 'paste', label: 'Paste', kbd: 'Ctrl+V', disabled: !this.currentTable },
             { id: 'duplicate', label: nRows ? 'Duplicate ' + nRows + ' ' + rowWord : 'Duplicate row', kbd: 'Ctrl+D', disabled: !nRows },
             { sep: true },
             { id: 'fill', label: 'Fill down', disabled: cells.length < 2 },
+            { id: 'sortaz', label: 'Sort A → Z', disabled: !this.selectedCell.colId },
+            { id: 'sortza', label: 'Sort Z → A', disabled: !this.selectedCell.colId },
             { sep: true },
             { id: 'cellrule', label: 'Set type / rule for this cell…', disabled: cells.length !== 1 },
             { id: 'colrule', label: 'Use the column type again', disabled: cells.length !== 1 || !this.hasCellOverride(cells[0].rec, cells[0].col) },
@@ -3163,6 +3094,9 @@
         store: {
           deep: true,
           handler() { this.schedulePersist(); }
+        },
+        sheetBindKey() {
+          this.$nextTick(() => this.bindSheet());
         }
       },
       methods: {
@@ -3172,6 +3106,211 @@
           if (!t || !col) return '';
           const i = t.columns.findIndex((c) => c.id === col.id);
           return i < 0 ? '' : colIndexToLetter(i);
+        },
+        sheetMatrix() {
+          const cols = this.visibleColumns;
+          return this.filteredRecords.map((rec) => cols.map((col) => {
+            const use = effectiveColumn(rec, col);
+            if (use.type === 'checkbox') return !!rawStored(rec, col);
+            if (use.type === 'attachment') return this.displayValue(rec, col) || '';
+            return this.displayValue(rec, col);
+          }));
+        },
+        sheetColumnDefs() {
+          const vm = this;
+          return this.visibleColumns.map((col, i) => {
+            const letter = vm.mode === 'architect' ? (colIndexToLetter(this.currentTable.columns.findIndex((c) => c.id === col.id)) + ' · ') : '';
+            const def = {
+              type: 'text',
+              title: letter + col.name,
+              width: col.width || 160,
+              align: ['number', 'currency', 'percent'].includes(col.type) ? 'right' : 'left',
+              readOnly: vm.isComputed(col) && !formulaUsesTypedValue(col)
+            };
+            if (col.type === 'checkbox') def.type = 'checkbox';
+            if (col.type === 'select') {
+              def.type = 'dropdown';
+              def.source = (col.options || []).map((o) => o.value);
+            }
+            if (col.type === 'autonumber' || col.type === 'rollup' || col.type === 'lookup' || col.type === 'attachment') def.readOnly = true;
+            if (i === 0) def.title = def.title;
+            return def;
+          });
+        },
+        destroySheet() {
+          const el = this.$refs.sheetHost;
+          try {
+            if (this._jexcel && typeof this._jexcel.destroy === 'function') this._jexcel.destroy();
+            else if (window.jspreadsheet && el && jspreadsheet.destroy) jspreadsheet.destroy(el);
+          } catch (err) { /* ignore */ }
+          if (el) el.innerHTML = '';
+          this._jexcel = null;
+        },
+        refreshSheetValues() {
+          if (!this._jexcel || this._sheetLock) return;
+          this._sheetLock = true;
+          try {
+            if (this._jexcel.ignoreEvents != null) this._jexcel.ignoreEvents = true;
+            this._jexcel.setData(this.sheetMatrix());
+          } catch (err) { /* ignore */ }
+          if (this._jexcel && this._jexcel.ignoreEvents != null) this._jexcel.ignoreEvents = false;
+          this._sheetLock = false;
+        },
+        bindSheet() {
+          const el = this.$refs.sheetHost;
+          const jss = window.jspreadsheet;
+          if (!el || this.view !== 'grid' || !this.currentTable || !this.visibleColumns.length) {
+            this.destroySheet();
+            return;
+          }
+          if (!jss) {
+            el.innerHTML = '<div class="p-6 text-sm text-mute">The sheet canvas did not load. Check the network and refresh.</div>';
+            return;
+          }
+          this.destroySheet();
+          const vm = this;
+          const data = this.sheetMatrix();
+          const inst = jss(el, {
+            data,
+            columns: this.sheetColumnDefs(),
+            tableOverflow: true,
+            tableWidth: '100%',
+            tableHeight: '100%',
+            defaultColWidth: 160,
+            columnDrag: true,
+            columnSorting: false,
+            allowInsertColumn: false,
+            allowManualInsertColumn: false,
+            allowDeleteColumn: false,
+            minDimensions: [this.visibleColumns.length, Math.max(this.filteredRecords.length, 0)],
+            allowInsertRow: false,
+            allowManualInsertRow: false,
+            allowDeleteRow: false,
+            parseFormulas: false,
+            copyCompatibility: true,
+            wordWrap: false,
+            contextMenu(obj, x, y, e) {
+              if (e) e.preventDefault();
+              const rec = y != null ? vm.filteredRecords[y] : null;
+              const col = x != null ? vm.visibleColumns[x] : null;
+              if (rec && col) vm.openCtxMenu(e || { clientX: 80, clientY: 80 }, 'cell', rec, col);
+              else if (col) vm.openCtxMenu(e || { clientX: 80, clientY: 80 }, 'col', null, col);
+              else if (rec) vm.openCtxMenu(e || { clientX: 80, clientY: 80 }, 'row', rec);
+              else vm.openCtxMenu(e || { clientX: 80, clientY: 80 }, 'corner');
+              return false;
+            },
+            onselection(instance, x1, y1, x2, y2) {
+              const rows = vm.filteredRecords;
+              const cols = vm.visibleColumns;
+              if (!rows.length || !cols.length) return;
+              const xa = Math.max(0, Math.min(x1, x2, cols.length - 1));
+              const xb = Math.max(0, Math.min(Math.max(x1, x2), cols.length - 1));
+              const ya = Math.max(0, Math.min(y1, y2, rows.length - 1));
+              const yb = Math.max(0, Math.min(Math.max(y1, y2), rows.length - 1));
+              vm.selectMode = 'cells';
+              vm.applySelection({ recId: rows[ya].id, colId: cols[xa].id }, { recId: rows[yb].id, colId: cols[xb].id });
+            },
+            oneditionstart(el2, cell, x, y) {
+              const rec = vm.filteredRecords[y];
+              const col = vm.visibleColumns[x];
+              if (!rec || !col) return;
+              if (vm.fxBar.open && vm.mode === 'architect') {
+                vm.insertFxBarRef(rec, col);
+                return false;
+              }
+              const use = vm.effectiveCol(rec, col);
+              if (rec.locked || (vm.isComputedCell(rec, col) && !formulaUsesTypedValue(use))) return false;
+              if (use.type === 'search' || isLinkCol(use) || use.type === 'attachment' || use.type === 'longtext') {
+                const r = cell.getBoundingClientRect();
+                vm.sheetEdit = {
+                  open: true,
+                  rec,
+                  col: use,
+                  style: { left: Math.min(r.left, window.innerWidth - 320) + 'px', top: (r.bottom + 4) + 'px', width: Math.max(240, r.width) + 'px' }
+                };
+                return false;
+              }
+              if (vm.mode === 'architect' && cellFxOf(rec, col) && vm.canWriteCellFx(rec, col)) {
+                vm.openFxBar(rec, col);
+                return false;
+              }
+            },
+            onbeforechange(el2, cell, x, y, value) {
+              if (vm._sheetLock) return value;
+              const rec = vm.filteredRecords[y];
+              const col = vm.visibleColumns[x];
+              if (!rec || !col) return '';
+              if (vm.mode === 'architect' && typeof value === 'string' && /^\s*=/.test(value) && vm.canWriteCellFx(rec, col)) {
+                vm.openFxBar(rec, col, value.trim());
+                return vm.displayValue(rec, col);
+              }
+              if (rec.locked || (vm.isComputedCell(rec, col) && !formulaUsesTypedValue(col))) return vm.displayValue(rec, col);
+              return value;
+            },
+            onafterchanges() {
+              if (vm._sheetLock) return;
+              const grid = vm._jexcel && vm._jexcel.getData && vm._jexcel.getData();
+              if (!grid) return;
+              vm._sheetLock = true;
+              const rows = vm.filteredRecords;
+              const cols = vm.visibleColumns;
+              grid.forEach((row, i) => {
+                const rec = rows[i];
+                if (!rec) return;
+                row.forEach((val, j) => {
+                  const col = cols[j];
+                  if (!col || rec.locked) return;
+                  if (vm.isComputedCell(rec, col) && !formulaUsesTypedValue(col)) return;
+                  const shown = String(vm.displayValue(rec, col) ?? '');
+                  const next = col.type === 'checkbox' ? val : String(val == null ? '' : val);
+                  if (col.type === 'checkbox') {
+                    if (!!rawStored(rec, col) !== !!val) vm.setCell(rec, col, !!val, true);
+                    return;
+                  }
+                  if (shown === next) return;
+                  const parsed = vm.coercePasteValue(col, val);
+                  if (!parsed.skip) vm.setCell(rec, col, parsed.value, true);
+                });
+              });
+              vm._sheetLock = false;
+              vm.$nextTick(() => vm.refreshSheetValues());
+            },
+            onmovecolumn(el2, from, to) {
+              from = Number(from); to = Number(to);
+              const vis = vm.visibleColumns;
+              const moved = vis[from];
+              const dest = vis[to];
+              if (moved && dest) vm.moveColumnTo(moved.id, dest.id);
+            },
+            onresizecolumn(el2, cell, width) {
+              const col = vm.visibleColumns[Number(cell)];
+              if (col) col.width = Number(width) || col.width;
+            },
+            ondblclick(el2, cell, x, y) {
+              if (y === null || y === undefined || Number(y) < 0) {
+                const col = vm.visibleColumns[Number(x)];
+                if (col && vm.mode === 'architect') vm.openColumnEditor(col);
+              }
+            }
+          });
+          this._jexcel = Array.isArray(inst) ? inst[0] : (inst || el.jspreadsheet && el.jspreadsheet[0] || el.jexcel);
+          this.$nextTick(() => {
+            const head = el.querySelectorAll('thead td:not(.jexcel_selectall)');
+            head.forEach((td, i) => {
+              td.title = vm.mode === 'architect' ? 'Double-click to edit this column (type, lookup, formula)' : td.title;
+              td.addEventListener('dblclick', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const col = vm.visibleColumns[i];
+                if (col && vm.mode === 'architect') vm.openColumnEditor(col);
+              });
+            });
+          });
+        },
+        commitSheetEdit(payload) {
+          this.commitPayload(payload);
+          this.sheetEdit.open = false;
+          this.$nextTick(() => this.refreshSheetValues());
         },
         recordNumber(rec) {
           const t = this.currentTable;
@@ -4047,6 +4186,8 @@
           else if (id === 'paste') this.pasteFromClipboard();
           else if (id === 'duplicate') this.duplicateSelectedRows();
           else if (id === 'fill') this.fillDownSelection();
+          else if (id === 'sortaz' && this.selectedCell.colId) this.sort = { colId: this.selectedCell.colId, dir: 'asc' };
+          else if (id === 'sortza' && this.selectedCell.colId) this.sort = { colId: this.selectedCell.colId, dir: 'desc' };
           else if (id === 'cellrule') this.openCellRule();
           else if (id === 'colrule') {
             const c = this.selectedCellEntries()[0];
@@ -5534,9 +5675,11 @@
           if (this.keysBlockedByUi()) return;
           const text = e.clipboardData && e.clipboardData.getData && e.clipboardData.getData('text/plain');
           if (this.view === 'grid' && this.currentTable && text && String(text).trim() !== '') {
-            e.preventDefault();
-            this._clipText = text;
-            this.pasteGrid(text);
+            if (!this.currentTable.columns.length || !this._jexcel) {
+              e.preventDefault();
+              this._clipText = text;
+              this.pasteGrid(text);
+            }
             return;
           }
           if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
@@ -5583,6 +5726,7 @@
           this.store = emptyStore();
         }
         this.ready = true;
+        this.$nextTick(() => this.bindSheet());
         window.addEventListener('paste', this.onPaste);
         window.addEventListener('copy', this.onCopy);
         window.addEventListener('click', this.onDocClick);
@@ -5596,6 +5740,7 @@
         window.removeEventListener('mouseup', this.endSelectDrag);
         window.removeEventListener('mousemove', this.onSelectPointerMove);
         window.removeEventListener('keydown', this.onWinKey);
+        this.destroySheet();
       }
     });
 
