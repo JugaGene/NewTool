@@ -29,7 +29,7 @@ Then visit `http://127.0.0.1:8764`.
 2. Set a 4–8 digit Architect PIN (you choose it; it never leaves this browser).
 3. Leave **Load sample operations workspace** checked to get Customers, Products, Orders, Line Items, and a **Rema** recipe already linked together.
 
-You start in **Operator Mode**. Structure is locked. Switch to **Architect Mode** with the PIN when you need to add tables, columns, lookups, formulas, or recipes.
+You start in **Operator Mode**. Structure is locked — including creating or editing recipes. Switch to **Architect Mode** with the PIN (gold **Architect** button in the header) when you need to add tables, columns, lookups, formulas, or recipes. Operators can still pick a recipe and Fill sheet.
 
 ## What to try
 

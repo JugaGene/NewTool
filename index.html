@@ -891,10 +891,14 @@
       <!-- Client recipes -->
       <modal-frame v-if="recipeOpen" title="Client order recipes" wide @close="recipeOpen=false">
         <p class="text-sm text-mute mb-3">Name the client, map PDF fields to columns, then choose what to put in the cell: the PDF text, a lookup/link on another sheet (same name or number), or a fixed value you type.</p>
+        <div v-if="mode!=='architect'" class="mb-3 rounded-lg border border-gold/40 bg-gold/10 px-3 py-2 text-sm text-gold">
+          You are in Operator Mode, so recipes are read-only. Click <strong class="text-white">Architect</strong> in the top bar and enter your PIN to add, edit, or delete recipes.
+          <button type="button" class="ml-2 rounded-md bg-gold text-ink-900 font-semibold px-2 py-0.5 text-[12px]" @click="requestArchitect">Unlock Architect</button>
+        </div>
         <div class="grid md:grid-cols-[11rem_1fr] gap-3">
           <div class="space-y-1">
             <button v-for="r in store.recipes" :key="r.id" class="w-full text-left rounded-lg border px-2 py-1.5 text-sm truncate" :class="recipeDraft.id===r.id ? 'border-teal bg-ink-900' : 'border-line hover:bg-ink-800'" @click="editRecipe(r)">{{ r.name }}</button>
-            <button v-if="mode==='architect'" class="w-full text-left text-teal text-sm px-2 py-1" @click="newRecipe">+ New recipe</button>
+            <button class="w-full text-left text-teal text-sm px-2 py-1" @click="mode==='architect' ? newRecipe() : requestArchitect()">+ New recipe</button>
             <p v-if="!store.recipes.length" class="text-[11px] text-mute px-1">No recipes yet.</p>
           </div>
           <div v-if="recipeDraft.id" class="space-y-3">
@@ -936,7 +940,7 @@
             <div>
               <div class="flex items-center justify-between mb-1">
                 <div class="text-sm font-medium">Header fields → cells</div>
-                <button v-if="mode==='architect'" class="text-[12px] text-teal" @click="addRecipeHeaderField">+ Field</button>
+                <button class="text-[12px] text-teal" @click="mode==='architect' ? addRecipeHeaderField() : requestArchitect()">+ Field</button>
               </div>
               <div class="space-y-2">
                 <div v-for="(f, i) in recipeDraft.headerFields" :key="f.id" class="rounded-lg border border-line p-2 grid sm:grid-cols-2 gap-2">
@@ -1051,11 +1055,11 @@
               <pre class="text-[11px] font-mono whitespace-pre-wrap max-h-40 overflow-auto">{{ recipePreview }}</pre>
             </div>
             <div class="flex flex-wrap gap-2 justify-between">
-              <button v-if="mode==='architect' && recipeDraft.id" class="text-sm text-red-300" @click="deleteRecipe">Delete recipe</button>
+              <button v-if="recipeDraft.id" class="text-sm text-red-300" @click="mode==='architect' ? deleteRecipe() : requestArchitect()">Delete recipe</button>
               <span v-else></span>
               <div class="flex gap-2">
                 <button class="text-sm rounded-lg border border-line px-3 py-1.5" @click="testRecipeOnDoc" :disabled="!activeDoc">Test on open PDF</button>
-                <button v-if="mode==='architect'" class="text-sm rounded-lg bg-gold text-ink-900 font-semibold px-3 py-1.5" @click="saveRecipe">Save recipe</button>
+                <button class="text-sm rounded-lg bg-gold text-ink-900 font-semibold px-3 py-1.5" @click="mode==='architect' ? saveRecipe() : requestArchitect()">Save recipe</button>
               </div>
             </div>
           </div>
