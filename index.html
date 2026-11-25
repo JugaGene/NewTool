@@ -54,8 +54,14 @@
     .data-grid tr:hover td { background: rgba(62, 207, 190, 0.04); }
     .data-grid tr:hover .sticky-col { background: #16233c; }
     .data-grid { user-select: none; }
+    .data-grid td { position: relative; }
     .data-grid td.sel { outline: 2px solid #3ecfbe; outline-offset: -2px; background: rgba(62, 207, 190, 0.16); z-index: 1; }
     .data-grid td.in-range { background: rgba(62, 207, 190, 0.12); }
+    .data-grid td.fill-preview { background: rgba(62, 207, 190, 0.22); }
+    .fill-handle { position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; background: #3ecfbe; border: 1px solid #0b1220; z-index: 8; cursor: crosshair; box-shadow: 0 0 0 1px rgba(11,18,32,.4); }
+    .fill-handle:hover { transform: scale(1.15); }
+    .col-move { display: inline-flex; align-items: flex-start; gap: 4px; min-width: 0; cursor: grab; }
+    .col-move:active, .data-grid.moving-col { cursor: grabbing; }
     .data-grid td.rowhead-sel { background: #1a4f4a; color: #3ecfbe; }
     .data-grid thead th.col-sel { background: #1a4f4a; color: #3ecfbe; }
     .ctx-menu { position: fixed; z-index: 90; min-width: 228px; max-width: 280px; padding: 6px 0; background: #10192c; border: 1px solid #2a3b5c; border-radius: 10px; box-shadow: 0 18px 48px rgba(0,0,0,.5); }
@@ -448,7 +454,7 @@
                   <button v-if="mode==='architect'" class="mt-3 rounded-lg bg-gold text-ink-900 font-semibold px-3 py-1.5" @click="openColumnEditor(null)">+ Column</button>
                 </div>
               </div>
-              <table v-else class="data-grid text-[13px]" :style="{ width: gridTableWidth + 'px', minWidth: gridTableWidth + 'px', maxWidth: gridTableWidth + 'px' }">
+              <table v-else class="data-grid text-[13px]" :class="[selectingDrag && 'selecting', colMoving && 'moving-col', fillDrag && 'filling']" :style="{ width: gridTableWidth + 'px', minWidth: gridTableWidth + 'px', maxWidth: gridTableWidth + 'px' }">
                 <colgroup>
                   <col :style="{ width: rowHeadWidth + 'px' }" />
                   <col v-for="col in visibleColumns" :key="col.id" :style="{ width: (col.width || 160) + 'px' }" />
@@ -469,20 +475,20 @@
                     </th>
                     <th v-for="col in visibleColumns" :key="col.id"
                       class="font-medium text-left px-2 py-2 cursor-pointer select-none"
+                      data-kind="colhead"
+                      :data-col-id="col.id"
                       :class="[dragOverColId===col.id && 'th-drop', isColSelected(col) && 'col-sel']"
                       :style="{ width: (col.width || 160) + 'px' }"
                       @mousedown="onHeaderMouseDown($event, col)"
-                      @mouseenter="onHeaderMouseEnter(col)"
                       @contextmenu.prevent="openCtxMenu($event, 'col', null, col)"
-                      @dragover.prevent="onColDragOver($event, col)"
-                      @drop.prevent="onColDrop($event, col)"
-                      @dragend="onColDragEnd"
-                      :title="'Click to select this column. Shift-click or drag across headers to select more. Use the grip to reorder. Drag the right edge to resize. Right-click to copy, paste, or duplicate.'">
+                      :title="'Click to select this column. Shift-click to extend. Drag the name to move the column. Drag the right edge to resize.'">
                       <div class="th-label">
-                        <span class="text-mute shrink-0 mt-0.5 cursor-grab" draggable="true" title="Drag to reorder columns" @mousedown.stop @dragstart="onColDragStart($event, col)"><icon name="grip" size="12" /></span>
-                        <span v-if="mode==='architect'" class="text-[10px] uppercase tracking-wide text-gold/80 font-mono shrink-0" :title="'Column ' + colLetter(col)">{{ colLetter(col) }}</span>
+                        <span class="col-move" title="Drag to move this column" @mousedown.stop="onColMoveMouseDown($event, col)">
+                          <span class="text-mute shrink-0 mt-0.5"><icon name="grip" size="12" /></span>
+                          <span v-if="mode==='architect'" class="text-[10px] uppercase tracking-wide text-gold/80 font-mono shrink-0" :title="'Column ' + colLetter(col)">{{ colLetter(col) }}</span>
+                          <span class="th-name">{{ col.name }}</span>
+                        </span>
                         <span class="text-[10px] uppercase tracking-wide text-mute shrink-0">{{ typeShort(col.type) }}</span>
-                        <span class="th-name">{{ col.name }}</span>
                         <span v-if="hasFormula(col)" class="text-gold font-mono text-[10px] shrink-0">fx</span>
                         <span v-else-if="col.type==='search'" class="text-gold font-mono text-[10px] shrink-0">find</span>
                         <span v-else-if="col.type==='lookup' || isKeyLink(col)" class="text-gold font-mono text-[10px] shrink-0">xl</span>
@@ -503,10 +509,11 @@
                   </tr>
                   <tr v-for="(rec, idx) in filteredRecords" :key="rec.id" :class="[isRowSelected(rec) && 'bg-teal/5', rec.hidden && 'opacity-50', rec.locked && 'row-locked']">
                     <td class="sticky-col text-center text-mute text-[11px] cursor-pointer"
+                      data-kind="rowhead"
+                      :data-rec-id="rec.id"
                       :class="[isRowSelected(rec) && 'rowhead-sel']"
                       :style="{ width: rowHeadWidth + 'px', minWidth: rowHeadWidth + 'px' }"
                       @mousedown.stop="onRowHeadMouseDown($event, rec)"
-                      @mouseenter="onRowHeadMouseEnter(rec)"
                       @contextmenu.prevent="openCtxMenu($event, 'row', rec)">
                       <div class="flex items-center justify-center gap-0.5 py-1 px-0.5">
                         <button type="button" class="lock-btn shrink-0" :class="rec.locked && 'is-locked'" :title="rec.locked ? 'Unlock this row' : 'Lock this row'" @mousedown.stop @click.stop.prevent="toggleRowLock(rec)">
@@ -520,9 +527,11 @@
                     </td>
                     <td v-for="col in visibleColumns" :key="col.id"
                       class="px-0 align-top"
-                      :class="[isComputedCell(rec, col) && 'locked', cellChange(rec, col) && 'changed', isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
+                      :data-rec-id="rec.id"
+                      :data-col-id="col.id"
+                      data-kind="cell"
+                      :class="[isComputedCell(rec, col) && 'locked', cellChange(rec, col) && 'changed', isFillPreview(rec, col) && 'fill-preview', isCellSelected(rec, col) && (selectedCell.recId===rec.id && selectedCell.colId===col.id ? 'sel' : 'in-range')]"
                       @mousedown.stop="onCellMouseDown($event, rec, col)"
-                      @mouseenter="onCellMouseEnter(rec, col)"
                       @contextmenu.prevent="openCtxMenu($event, 'cell', rec, col)">
                       <div v-if="effectiveCol(rec, col).type==='attachment'" class="px-1 py-1 min-h-[34px]" @mousedown.stop>
                         <attach-cell :column="effectiveCol(rec, col)" :record="rec" variant="grid" :locked="!!rec.locked" @commit="onFormCommit" @open="openAttachment" />
@@ -540,6 +549,7 @@
                         <span v-if="cellFx(rec, col)" class="ptr-chip" :title="'=' + cellFx(rec, col)">fx</span>
                         <span v-else-if="cellRuleType(rec, col)" class="ptr-chip" :title="'This cell is ' + cellRuleType(rec, col) + ' (column stays ' + col.type + ')'">{{ typeShort(cellRuleType(rec, col)) }}</span>
                       </div>
+                      <span v-if="isFillHandleCell(rec, col)" class="fill-handle" title="Drag to fill. Then choose Copy or Fill series." @mousedown.stop.prevent="startFillDrag($event)"></span>
                     </td>
                   </tr>
                 </tbody>
@@ -1064,6 +1074,11 @@
         </template>
       </div>
 
+      <div v-if="fillMenu.open" class="ctx-menu" :style="{ left: fillMenu.x + 'px', top: fillMenu.y + 'px', minWidth: '160px' }" @mousedown.stop @click.stop>
+        <button type="button" @click="chooseFill('copy')"><span>Copy cells</span></button>
+        <button type="button" :disabled="!fillMenu.canSeries" @click="chooseFill('series')"><span>Fill series</span></button>
+      </div>
+
       <!-- Toasts -->
       <div class="fixed bottom-4 right-4 z-[80] space-y-2 w-80">
         <div v-for="t in toasts" :key="t.id" class="toast-enter rounded-lg border px-3 py-2 text-sm shadow-panel" :class="t.kind==='error' ? 'bg-red-950 border-red-500/40 text-red-100' : t.kind==='warn' ? 'bg-amber-950 border-amber-500/40' : 'bg-ink-850 border-line'">
@@ -1389,6 +1404,50 @@
     function shiftA1InText(text, dR, dC) {
       if (!text || !(dR || dC)) return text;
       return String(text).replace(/(?:[A-Za-z_][\w ]*!)?[A-Za-z]+\d+/g, (m) => parseA1(m) ? shiftA1Token(m, dR, dC) : m);
+    }
+    function parseFillToken(v) {
+      if (v == null || v === '') return { kind: 'empty' };
+      if (typeof v === 'number' && Number.isFinite(v)) return { kind: 'num', n: v };
+      if (isDateVal(v)) return { kind: 'date', t: v.getTime() };
+      const s = String(v).trim();
+      if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s) || /^\d{4}-\d{2}-\d{2}/.test(s)) {
+        const d = parseDateValue(s);
+        if (d) return { kind: 'date', t: d.getTime() };
+      }
+      if (/^-?\d+(\.\d+)?$/.test(s)) return { kind: 'num', n: Number(s) };
+      const m = /^(.*?)(\d+)$/.exec(s);
+      if (m) return { kind: 'textnum', prefix: m[1], n: Number(m[2]), width: m[2].length };
+      return { kind: 'text', s };
+    }
+    function fillSeriesExtra(srcValues, extraCount) {
+      if (!(extraCount > 0)) return null;
+      const toks = (srcValues || []).map(parseFillToken);
+      if (!toks.length || toks.some((t) => t.kind === 'empty')) return null;
+      const k = toks[0].kind;
+      if (k === 'text' || !toks.every((t) => t.kind === k)) return null;
+      let step = 1;
+      if (toks.length >= 2) {
+        const steps = [];
+        for (let i = 1; i < toks.length; i++) {
+          const a = toks[i - 1], b = toks[i];
+          if (k === 'date') steps.push((b.t - a.t) / DAY_MS);
+          else steps.push(b.n - a.n);
+        }
+        if (!steps.every((s) => s === steps[0])) return null;
+        step = steps[0];
+      }
+      const last = toks[toks.length - 1];
+      const out = [];
+      for (let i = 1; i <= extraCount; i++) {
+        if (k === 'num') out.push(last.n + step * i);
+        else if (k === 'date') out.push(new Date(last.t + step * i * DAY_MS));
+        else {
+          const n = last.n + step * i;
+          const sign = n < 0 ? '-' : '';
+          out.push(last.prefix + sign + String(Math.abs(n)).padStart(last.width, '0'));
+        }
+      }
+      return out;
     }
     function snapshotCellRule(rec, col) {
       return {
@@ -2468,9 +2527,21 @@
         }
         this.ready = true;
         if (this.variant === 'grid') {
+          const seed = this.$root && this.$root.editSeed;
+          if (seed != null && seed !== '') {
+            this.buffer = seed;
+            this.dirty = true;
+            this.$root.editSeed = '';
+          }
           this.$nextTick(() => {
             const el = this.$refs.input;
-            if (el && el.focus) { el.focus(); if (el.select && !this.isSearchLink) el.select(); }
+            if (el && el.focus) {
+              el.focus();
+              if (seed) {
+                const n = String(this.buffer || '').length;
+                if (el.setSelectionRange) el.setSelectionRange(n, n);
+              } else if (el.select && !this.isSearchLink) el.select();
+            }
             if (isLinkCol(this.column)) this.open = true;
           });
         }
@@ -2737,6 +2808,11 @@
           selectionAnchor: { recId: null, colId: null },
           selectionFocus: { recId: null, colId: null },
           selectingDrag: false,
+          colMoving: false,
+          fillDrag: null,
+          fillMenu: { open: false, x: 0, y: 0, canSeries: false },
+          fillJob: null,
+          editSeed: '',
           selectMode: 'cells',
           ctxMenu: { open: false, x: 0, y: 0, kind: 'cell' },
           formulaRel: { colName: 'This', offset: -1 },
@@ -2803,6 +2879,35 @@
           return col ? this.displayValue(rec, col) : rec.id.slice(-6);
         },
         visibleColumns() { return this.currentTable ? this.currentTable.columns.filter((c) => !c.hidden) : []; },
+        selectionIndex() {
+          const rows = this.filteredRecords;
+          const cols = this.visibleColumns;
+          const rMap = {};
+          const cMap = {};
+          rows.forEach((r, i) => { rMap[r.id] = i; });
+          cols.forEach((c, i) => { cMap[c.id] = i; });
+          const aR = rMap[(this.selectionAnchor && this.selectionAnchor.recId) || ''];
+          const fR = rMap[(this.selectionFocus && this.selectionFocus.recId) || ''];
+          const aC = cMap[(this.selectionAnchor && this.selectionAnchor.colId) || ''];
+          const fC = cMap[(this.selectionFocus && this.selectionFocus.colId) || ''];
+          if (aR == null || fR == null || aC == null || fC == null) {
+            const recId = this.selectedCell && this.selectedCell.recId;
+            const colId = this.selectedCell && this.selectedCell.colId;
+            if (recId && colId && rMap[recId] != null && cMap[colId] != null) {
+              const r = rMap[recId], c = cMap[colId];
+              return { r0: r, r1: r, c0: c, c1: c, rMap, cMap };
+            }
+            return { r0: -1, r1: -1, c0: -1, c1: -1, rMap, cMap };
+          }
+          return {
+            r0: Math.min(aR, fR),
+            r1: Math.max(aR, fR),
+            c0: Math.min(aC, fC),
+            c1: Math.max(aC, fC),
+            rMap,
+            cMap
+          };
+        },
         canAddRows() { return !!(this.currentTable && this.currentTable.columns.length); },
         workspacePanelOpen() {
           if (this.windowWidth < 768) return this.sidebarOpen;
@@ -3754,29 +3859,34 @@
         selectedCellEntries() {
           const rows = this.filteredRecords;
           const cols = this.visibleColumns;
-          if (!rows.length || !cols.length) return [];
-          const aR = rows.findIndex((r) => r.id === (this.selectionAnchor && this.selectionAnchor.recId));
-          const fR = rows.findIndex((r) => r.id === (this.selectionFocus && this.selectionFocus.recId));
-          const aC = cols.findIndex((c) => c.id === (this.selectionAnchor && this.selectionAnchor.colId));
-          const fC = cols.findIndex((c) => c.id === (this.selectionFocus && this.selectionFocus.colId));
-          if (aR < 0 || fR < 0 || aC < 0 || fC < 0) {
-            if (this.selectedCell && this.selectedCell.recId && this.selectedCell.colId) {
-              const rec = rows.find((r) => r.id === this.selectedCell.recId);
-              const col = cols.find((c) => c.id === this.selectedCell.colId);
-              if (rec && col) return [{ rec, col }];
-            }
-            return [];
-          }
-          const r0 = Math.min(aR, fR), r1 = Math.max(aR, fR);
-          const c0 = Math.min(aC, fC), c1 = Math.max(aC, fC);
+          const s = this.selectionIndex;
+          if (!rows.length || !cols.length || s.r0 < 0) return [];
           const out = [];
-          for (let i = r0; i <= r1; i++) {
-            for (let j = c0; j <= c1; j++) out.push({ rec: rows[i], col: cols[j] });
+          for (let i = s.r0; i <= s.r1; i++) {
+            for (let j = s.c0; j <= s.c1; j++) out.push({ rec: rows[i], col: cols[j] });
           }
           return out;
         },
         isCellSelected(rec, col) {
-          return this.selectedCellEntries().some((x) => x.rec.id === rec.id && x.col.id === col.id);
+          const s = this.selectionIndex;
+          if (s.r0 < 0 || !rec || !col) return false;
+          const r = s.rMap[rec.id], c = s.cMap[col.id];
+          return r != null && c != null && r >= s.r0 && r <= s.r1 && c >= s.c0 && c <= s.c1;
+        },
+        isFillHandleCell(rec, col) {
+          if (this.editing.recId || this.fxBar.open || this.view !== 'grid') return false;
+          const s = this.selectionIndex;
+          if (s.r0 < 0) return false;
+          const rows = this.filteredRecords;
+          const cols = this.visibleColumns;
+          return rec.id === rows[s.r1].id && col.id === cols[s.c1].id;
+        },
+        isFillPreview(rec, col) {
+          const box = this.fillDrag && this.fillDrag.box;
+          if (!box || box.r0 < 0) return false;
+          const s = this.selectionIndex;
+          const r = s.rMap[rec.id], c = s.cMap[col.id];
+          return r != null && c != null && r >= box.r0 && r <= box.r1 && c >= box.c0 && c <= box.c1;
         },
         isRowSelected(rec) {
           const cols = this.visibleColumns;
@@ -3863,13 +3973,18 @@
         },
         onCellMouseDown(e, rec, col) {
           if (e.button !== 0) return;
-          if (e.detail > 1) return;
+          e.preventDefault();
+          this.fillMenu.open = false;
           if (this.fxBar.open && this.mode === 'architect') {
-            e.preventDefault();
             this.insertFxBarRef(rec, col);
             return;
           }
           this.closeCtxMenu();
+          if (e.detail > 1) {
+            this.selectingDrag = false;
+            this.beginEdit(rec, col);
+            return;
+          }
           this.selectMode = 'cells';
           this.selectCell(rec, col, e);
           this.selectingDrag = true;
@@ -3877,14 +3992,10 @@
           this._pressCell = { recId: rec.id, colId: col.id, shift: !!e.shiftKey, meta: !!(e.metaKey || e.ctrlKey) };
           if (col.type === 'checkbox' && !e.shiftKey && !rec.locked) {
             this._pressCell = null;
+            this.selectingDrag = false;
             this.setCell(rec, col, !rawStored(rec, col));
           }
           this.focusGrid();
-        },
-        onCellMouseEnter(rec, col) {
-          if (!this.selectingDrag) return;
-          if (this._pressCell && (rec.id !== this._pressCell.recId || col.id !== this._pressCell.colId)) this._cellDragged = true;
-          this.applySelection(this.selectionAnchor, { recId: rec.id, colId: col.id });
         },
         onRowHeadMouseDown(e, rec) {
           if (e.button !== 0) return;
@@ -3901,37 +4012,268 @@
             this.applySelection({ recId: rec.id, colId: first.id }, { recId: rec.id, colId: last.id });
           }
         },
-        onRowHeadMouseEnter(rec) {
-          if (!this.selectingDrag || this.selectMode !== 'rows') return;
-          const cols = this.visibleColumns;
-          if (!cols.length) return;
-          this.applySelection({ recId: this.selectionAnchor.recId, colId: cols[0].id }, { recId: rec.id, colId: cols[cols.length - 1].id });
+        hitGridEl(x, y) {
+          const node = document.elementFromPoint(x, y);
+          if (!node || !node.closest) return null;
+          const cell = node.closest('td[data-kind="cell"]');
+          if (cell && cell.getAttribute('data-rec-id') && cell.getAttribute('data-col-id')) {
+            return { kind: 'cell', recId: cell.getAttribute('data-rec-id'), colId: cell.getAttribute('data-col-id') };
+          }
+          const row = node.closest('td[data-kind="rowhead"]');
+          if (row && row.getAttribute('data-rec-id')) return { kind: 'row', recId: row.getAttribute('data-rec-id') };
+          const head = node.closest('th[data-kind="colhead"]');
+          if (head && head.getAttribute('data-col-id')) return { kind: 'col', colId: head.getAttribute('data-col-id') };
+          return null;
         },
-        endSelectDrag() {
-          const press = this._pressCell;
-          const dragged = this._cellDragged;
-          const mode = this.selectMode;
+        scrollGridToward(e) {
+          const box = document.querySelector('.grid-scroll');
+          if (!box) return;
+          const r = box.getBoundingClientRect();
+          const m = 36;
+          let dx = 0, dy = 0;
+          if (e.clientX > r.right - m) dx = Math.min(48, 12 + (e.clientX - (r.right - m)));
+          else if (e.clientX < r.left + m) dx = -Math.min(48, 12 + ((r.left + m) - e.clientX));
+          if (e.clientY > r.bottom - m) dy = Math.min(48, 12 + (e.clientY - (r.bottom - m)));
+          else if (e.clientY < r.top + m) dy = -Math.min(48, 12 + ((r.top + m) - e.clientY));
+          if (dx || dy) box.scrollBy(dx, dy);
+        },
+        onSelectPointerMove(e) {
+          if (e.buttons !== 1 && (this.selectingDrag || this.colMoving || this.fillDrag || this._colMovePress)) {
+            this.endSelectDrag(e);
+            return;
+          }
+          if (this._colMovePress && !this.colMoving) {
+            const d = Math.hypot(e.clientX - this._colMovePress.x, e.clientY - this._colMovePress.y);
+            if (d > 5) {
+              this.colMoving = true;
+              this.selectingDrag = false;
+              this.dragColId = this._colMovePress.colId;
+            }
+          }
+          if (this.colMoving) {
+            this.scrollGridToward(e);
+            const hit = this.hitGridEl(e.clientX, e.clientY);
+            if (hit && hit.kind === 'col') this.dragOverColId = hit.colId;
+            return;
+          }
+          if (this.fillDrag) {
+            this.scrollGridToward(e);
+            const hit = this.hitGridEl(e.clientX, e.clientY);
+            if (hit && hit.kind === 'cell') {
+              const rec = this.filteredRecords.find((r) => r.id === hit.recId);
+              const col = this.visibleColumns.find((c) => c.id === hit.colId);
+              if (rec && col) this.fillDrag.box = this.computeFillBox(this.fillDrag.src, rec, col);
+            }
+            return;
+          }
+          if (!this.selectingDrag) return;
+          this.scrollGridToward(e);
+          const hit = this.hitGridEl(e.clientX, e.clientY);
+          if (!hit) return;
+          const rows = this.filteredRecords;
+          const cols = this.visibleColumns;
+          if (this.selectMode === 'cells' && hit.kind === 'cell') {
+            if (this._pressCell && (hit.recId !== this._pressCell.recId || hit.colId !== this._pressCell.colId)) this._cellDragged = true;
+            this.applySelection(this.selectionAnchor, { recId: hit.recId, colId: hit.colId });
+          } else if (this.selectMode === 'rows' && (hit.kind === 'row' || hit.kind === 'cell')) {
+            if (!cols.length) return;
+            this.applySelection({ recId: this.selectionAnchor.recId, colId: cols[0].id }, { recId: hit.recId, colId: cols[cols.length - 1].id });
+          } else if (this.selectMode === 'cols' && (hit.kind === 'col' || hit.kind === 'cell')) {
+            if (!rows.length) return;
+            this.applySelection({ recId: rows[0].id, colId: this.selectionAnchor.colId }, { recId: rows[rows.length - 1].id, colId: hit.colId });
+          }
+        },
+        onColMoveMouseDown(e, col) {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          if (this.fxBar.open && this.mode === 'architect') {
+            this.insertFxBarRef(null, col);
+            return;
+          }
+          this.closeCtxMenu();
+          this.fillMenu.open = false;
+          this._colMovePress = { colId: col.id, x: e.clientX, y: e.clientY, shift: !!e.shiftKey };
+          this.dragColId = col.id;
+        },
+        moveColumnTo(fromId, toId) {
+          if (!fromId || !toId || fromId === toId || !this.currentTable) return;
+          const cols = this.currentTable.columns;
+          const from = cols.findIndex((c) => c.id === fromId);
+          const to = cols.findIndex((c) => c.id === toId);
+          if (from < 0 || to < 0) return;
+          const [moved] = cols.splice(from, 1);
+          cols.splice(to, 0, moved);
+          this.audit('column.reorder', this.currentTable.name + '.' + moved.name, '');
+        },
+        computeFillBox(src, rec, col) {
+          const s = this.selectionIndex;
+          const r = s.rMap[rec.id], c = s.cMap[col.id];
+          if (r == null || c == null) return { r0: src.r0, r1: src.r1, c0: src.c0, c1: src.c1, axis: 'row' };
+          let r0 = src.r0, r1 = src.r1, c0 = src.c0, c1 = src.c1;
+          const dr = r < src.r0 ? r - src.r0 : (r > src.r1 ? r - src.r1 : 0);
+          const dc = c < src.c0 ? c - src.c0 : (c > src.c1 ? c - src.c1 : 0);
+          const axis = Math.abs(dr) >= Math.abs(dc) ? 'row' : 'col';
+          if (axis === 'row') {
+            if (dr < 0) r0 = r; else if (dr > 0) r1 = r;
+          } else {
+            if (dc < 0) c0 = c; else if (dc > 0) c1 = c;
+          }
+          return { r0, r1, c0, c1, axis };
+        },
+        startFillDrag(e) {
+          if (e.button !== 0) return;
+          const s = this.selectionIndex;
+          if (s.r0 < 0) return;
+          this.closeCtxMenu();
+          this.fillMenu.open = false;
+          this.selectingDrag = false;
+          this.fillDrag = { src: { r0: s.r0, r1: s.r1, c0: s.c0, c1: s.c1 }, box: { r0: s.r0, r1: s.r1, c0: s.c0, c1: s.c1, axis: 'row' } };
+        },
+        sourceValuesForFill(src, axis, index) {
+          const rows = this.filteredRecords;
+          const cols = this.visibleColumns;
+          const vals = [];
+          if (axis === 'row') {
+            const col = cols[index];
+            for (let r = src.r0; r <= src.r1; r++) vals.push(rawStored(rows[r], col));
+          } else {
+            const rec = rows[index];
+            for (let c = src.c0; c <= src.c1; c++) vals.push(rawStored(rec, cols[c]));
+          }
+          return vals;
+        },
+        canFillSeries(src, box) {
+          if (!box || box.r0 === src.r0 && box.r1 === src.r1 && box.c0 === src.c0 && box.c1 === src.c1) return false;
+          if (box.axis === 'row') {
+            const extra = box.r0 < src.r0 ? src.r0 - box.r0 : box.r1 - src.r1;
+            for (let c = src.c0; c <= src.c1; c++) {
+              const vals = this.sourceValuesForFill(src, 'row', c);
+              const dirVals = box.r0 < src.r0 ? vals.slice().reverse() : vals;
+              if (fillSeriesExtra(dirVals, extra)) return true;
+            }
+          } else {
+            const extra = box.c0 < src.c0 ? src.c0 - box.c0 : box.c1 - src.c1;
+            for (let r = src.r0; r <= src.r1; r++) {
+              const vals = this.sourceValuesForFill(src, 'col', r);
+              const dirVals = box.c0 < src.c0 ? vals.slice().reverse() : vals;
+              if (fillSeriesExtra(dirVals, extra)) return true;
+            }
+          }
+          return false;
+        },
+        applyFillJob(mode) {
+          const job = this.fillJob;
+          if (!job) return;
+          const src = job.src, box = job.box;
+          const t = this.currentTable;
+          const rows = this.filteredRecords;
+          const cols = this.visibleColumns;
+          const srcH = src.r1 - src.r0 + 1;
+          const srcW = src.c1 - src.c0 + 1;
+          let n = 0;
+          const wrap = (i, start, len) => start + ((i - start) % len + len) % len;
+          if (mode === 'series') {
+            if (box.axis === 'row') {
+              const up = box.r0 < src.r0;
+              const extra = up ? src.r0 - box.r0 : box.r1 - src.r1;
+              for (let c = src.c0; c <= src.c1; c++) {
+                const col = cols[c];
+                const vals = this.sourceValuesForFill(src, 'row', c);
+                const seq = fillSeriesExtra(up ? vals.slice().reverse() : vals, extra);
+                if (!seq) continue;
+                for (let i = 0; i < extra; i++) {
+                  const r = up ? src.r0 - 1 - i : src.r1 + 1 + i;
+                  if (this.setCell(rows[r], col, seq[i], true)) n++;
+                }
+              }
+            } else {
+              const left = box.c0 < src.c0;
+              const extra = left ? src.c0 - box.c0 : box.c1 - src.c1;
+              for (let r = src.r0; r <= src.r1; r++) {
+                const rec = rows[r];
+                const vals = this.sourceValuesForFill(src, 'col', r);
+                const seq = fillSeriesExtra(left ? vals.slice().reverse() : vals, extra);
+                if (!seq) continue;
+                for (let i = 0; i < extra; i++) {
+                  const c = left ? src.c0 - 1 - i : src.c1 + 1 + i;
+                  if (this.setCell(rec, cols[c], seq[i], true)) n++;
+                }
+              }
+            }
+            this.toast(n ? ('Filled series in ' + n + ' cell' + (n === 1 ? '' : 's')) : 'Could not fill a series here.', n ? undefined : 'warn');
+            return;
+          }
+          for (let r = box.r0; r <= box.r1; r++) {
+            for (let c = box.c0; c <= box.c1; c++) {
+              if (r >= src.r0 && r <= src.r1 && c >= src.c0 && c <= src.c1) continue;
+              const sr = wrap(r, src.r0, srcH);
+              const sc = wrap(c, src.c0, srcW);
+              const dest = rows[r], dcol = cols[c], srec = rows[sr], scol = cols[sc];
+              const destRi = t.records.findIndex((x) => x.id === dest.id);
+              const srcRi = t.records.findIndex((x) => x.id === srec.id);
+              const destCi = t.columns.findIndex((x) => x.id === dcol.id);
+              const srcCi = t.columns.findIndex((x) => x.id === scol.id);
+              if (this.applyCellRule(dest, dcol, snapshotCellRule(srec, scol), destRi - srcRi, destCi - srcCi, true)) n++;
+            }
+          }
+          this.toast(n ? ('Copied into ' + n + ' cell' + (n === 1 ? '' : 's')) : 'Nothing to fill.', n ? undefined : 'warn');
+        },
+        chooseFill(mode) {
+          this.fillMenu.open = false;
+          if (mode === 'copy') return;
+          this.applyFillJob('series');
+        },
+        finishFillDrag(e) {
+          const drag = this.fillDrag;
+          this.fillDrag = null;
+          if (!drag || !drag.box) return;
+          const src = drag.src, box = drag.box;
+          if (box.r0 === src.r0 && box.r1 === src.r1 && box.c0 === src.c0 && box.c1 === src.c1) return;
+          this.fillJob = { src, box };
+          this.applyFillJob('copy');
+          const canSeries = this.canFillSeries(src, box);
+          this._holdFillMenu = true;
+          this.fillMenu = {
+            open: true,
+            x: (e && e.clientX) || 80,
+            y: (e && e.clientY) || 80,
+            canSeries
+          };
+          setTimeout(() => { this._holdFillMenu = false; }, 80);
+          const rows = this.filteredRecords, cols = this.visibleColumns;
+          this.applySelection({ recId: rows[box.r0].id, colId: cols[box.c0].id }, { recId: rows[box.r1].id, colId: cols[box.c1].id });
+        },
+        endSelectDrag(e) {
+          if (this.colMoving) {
+            this.moveColumnTo(this.dragColId, this.dragOverColId);
+            this.colMoving = false;
+            this.dragColId = null;
+            this.dragOverColId = null;
+            this._colMovePress = null;
+            return;
+          }
+          if (this._colMovePress && !this.colMoving) {
+            const col = this.currentTable && findColumn(this.currentTable, this._colMovePress.colId);
+            const shift = this._colMovePress.shift;
+            this._colMovePress = null;
+            this.dragColId = null;
+            if (col) this.selectColumn(col, { shiftKey: shift });
+            return;
+          }
+          this._colMovePress = null;
+          if (this.fillDrag) {
+            this.finishFillDrag(e);
+            return;
+          }
           this.selectingDrag = false;
           this._pressCell = null;
           this._cellDragged = false;
-          if (mode === 'rows' || mode === 'cols' || mode === 'all') return;
-          if (!press || dragged || press.shift || press.meta) return;
-          if (this.view !== 'grid' || this.keysBlockedByUi() || this.ctxMenu.open || this.fxBar.open) return;
-          const rec = this.filteredRecords.find((r) => r.id === press.recId);
-          const col = this.visibleColumns.find((c) => c.id === press.colId);
-          if (!rec || !col || col.type === 'checkbox' || col.type === 'attachment') return;
-          if (this.mode === 'architect' && cellFxOf(rec, col) && this.canWriteCellFx(rec, col)) {
-            this.openFxBar(rec, col);
-            return;
-          }
-          if (this.isComputedCell(rec, col)) return;
-          this.beginEdit(rec, col);
         },
         onHeaderMouseDown(e, col) {
           if (e.button !== 0) return;
           if (this._didResize) { this._didResize = false; return; }
           const t = e.target;
-          if (t && t.closest && (t.closest('.col-resizer') || t.closest('button') || t.closest('[draggable="true"]'))) return;
+          if (t && t.closest && (t.closest('.col-resizer') || t.closest('button') || t.closest('.col-move'))) return;
           if (this.fxBar.open && this.mode === 'architect') {
             e.preventDefault();
             this.insertFxBarRef(null, col);
@@ -3942,12 +4284,6 @@
           this.selectMode = 'cols';
           this.selectColumn(col, e);
           this.focusGrid();
-        },
-        onHeaderMouseEnter(col) {
-          if (!this.selectingDrag || this.selectMode !== 'cols') return;
-          const rows = this.filteredRecords;
-          if (!rows.length) return;
-          this.applySelection({ recId: rows[0].id, colId: this.selectionAnchor.colId }, { recId: rows[rows.length - 1].id, colId: col.id });
         },
         onCornerMouseDown(e) {
           if (e.button !== 0) return;
@@ -3986,7 +4322,8 @@
           this.selectMode = 'cols';
           this.applySelection({ recId: rows[0].id, colId: colIds[0] }, { recId: rows[rows.length - 1].id, colId: colIds[colIds.length - 1] });
         },
-        beginEdit(rec, col) {
+        beginEdit(rec, col, seed) {
+          this.editSeed = seed != null ? seed : '';
           if (rec && rec.locked) return this.toast('This row is locked. Uncheck the lock to edit.');
           if (this.mode === 'architect' && cellFxOf(rec, col) && this.canWriteCellFx(rec, col)) {
             this.openFxBar(rec, col);
@@ -4661,6 +4998,21 @@
             if (rec && col && this.canWriteCellFx(rec, col)) {
               e.preventDefault();
               this.openFxBar(rec, col, '=');
+              return;
+            }
+          }
+          if (e.key === 'F2') {
+            const rec = this.selectedRecord;
+            const col = this.currentTable && findColumn(this.currentTable, this.selectedCell && this.selectedCell.colId);
+            if (rec && col) { e.preventDefault(); this.beginEdit(rec, col); }
+            return;
+          }
+          if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && !(e.key === ' ' && e.shiftKey)) {
+            const rec = this.selectedRecord;
+            const col = this.currentTable && findColumn(this.currentTable, this.selectedCell && this.selectedCell.colId);
+            if (rec && col && !this.isComputedCell(rec, col) && col.type !== 'checkbox' && col.type !== 'attachment') {
+              e.preventDefault();
+              this.beginEdit(rec, col, e.key);
             }
             return;
           }
@@ -5060,6 +5412,12 @@
           const shownFx = formatDisplay(a1ws, cu, cu.records[1], cityCol);
           if (shownFx !== 'Acme Industrial') console.warn('cell fx A1 failed', shownFx);
           if (formatDisplay(a1ws, cu, cu.records[0], cityCol) === shownFx) console.warn('cell fx should not apply to other rows');
+          const ser = fillSeriesExtra([1, 2], 2);
+          if (!ser || ser[0] !== 3 || ser[1] !== 4) console.warn('fill series numbers failed', ser);
+          const dates = fillSeriesExtra([utcDate(2026, 1, 1)], 1);
+          if (!dates || formatDateDMY(dates[0]) !== '02/01/2026') console.warn('fill series dates failed', dates);
+          const labels = fillSeriesExtra(['Item1', 'Item2'], 1);
+          if (!labels || labels[0] !== 'Item3') console.warn('fill series textnum failed', labels);
         },
         onPaste(e) {
           const target = e.target;
@@ -5081,13 +5439,19 @@
             }
           });
         },
-        onDocClick() { this.moreOpen = false; this.closeCtxMenu(); },
+        onDocClick() {
+          if (this._holdFillMenu) return;
+          this.moreOpen = false;
+          this.closeCtxMenu();
+          this.fillMenu.open = false;
+        },
         onWinResize() { this.windowWidth = window.innerWidth; }
       },
       mounted() {
         this.onWinResize();
         window.addEventListener('resize', this.onWinResize);
         window.addEventListener('mouseup', this.endSelectDrag);
+        window.addEventListener('mousemove', this.onSelectPointerMove);
         this.selfTest();
         try {
           const raw = localStorage.getItem(STORAGE_KEY);
@@ -5121,6 +5485,7 @@
         window.removeEventListener('click', this.onDocClick);
         window.removeEventListener('resize', this.onWinResize);
         window.removeEventListener('mouseup', this.endSelectDrag);
+        window.removeEventListener('mousemove', this.onSelectPointerMove);
         window.removeEventListener('keydown', this.onWinKey);
       }
     });
