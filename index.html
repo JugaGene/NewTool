@@ -100,6 +100,14 @@
     .th-drop { box-shadow: inset 3px 0 0 #f5b942; }
     .split-resizer { width: 6px; cursor: col-resize; background: transparent; }
     .split-resizer:hover, .split-resizer.active { background: #3ecfbe; }
+    .pdf-page { position: relative; background: #fff; }
+    .pdf-page canvas { display: block; width: 100%; height: auto; }
+    .pdf-hits { position: absolute; inset: 0; }
+    .pdf-hit { position: absolute; border: 1px solid transparent; background: transparent; padding: 0; }
+    .pdf-teach .pdf-hit { cursor: pointer; }
+    .pdf-teach .pdf-hit:hover { background: rgba(245, 185, 66, 0.35); outline: 1px solid #f5b942; }
+    .pdf-hit.mapped { outline: 1px solid #3ecfbe; background: rgba(62, 207, 190, 0.2); }
+    .pdf-hit.pick { outline: 1px solid #f5b942; background: rgba(245, 185, 66, 0.2); }
     .doc-drop.drag { border-color: #3ecfbe; background: rgba(62, 207, 190, 0.08); }
     .nav-drop { box-shadow: inset 0 0 0 1px #f5b942; background: rgba(245, 185, 66, 0.08); }
     .nav-dragging { opacity: .45; }
@@ -134,7 +142,7 @@
         </div>
         <div class="p-6 space-y-4">
           <p class="text-sm text-mute leading-relaxed">
-            Build categories, sheets, lookup links, and formulas. Create a <strong>client recipe</strong> (for example Rema) that maps PDF fields into cells. Drop a PDF on the left, pick the recipe, and ForgeGrid fills the sheet. Everything stays in this browser via localStorage.
+            Build categories, sheets, lookup links, and formulas. Teach a <strong>client recipe</strong> by clicking a column, then clicking that value on the PDF. Drop the next order, pick the recipe, and ForgeGrid fills the sheet. Everything stays in this browser via localStorage.
           </p>
           <div v-if="corrupt" class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
             A previous workspace file was unreadable and was not loaded. Start fresh or import a JSON backup after setup.
@@ -224,8 +232,18 @@
         </div>
       </header>
 
-      <div v-if="mode==='architect'" class="shrink-0 bg-gold text-ink-900 text-[12px] font-semibold px-4 py-1">
+      <div v-if="mode==='architect' && !recipeTeach.active" class="shrink-0 bg-gold text-ink-900 text-[12px] font-semibold px-4 py-1">
         Architect Mode is unlocked — categories, sheets, lookups, formulas, and client recipes can be changed. Switch back to Operator Mode before handing this screen to data-entry staff.
+      </div>
+      <div v-if="recipeTeach.active" class="shrink-0 bg-gold text-ink-900 px-3 py-2 text-[13px] flex flex-wrap items-center gap-2">
+        <span class="font-semibold">Teaching {{ (recipeDraft && recipeDraft.name) || 'recipe' }}</span>
+        <span class="opacity-80">{{ recipeTeach.wait==='pdf' ? ('Click the value on the PDF for “' + recipeTeach.colName + '”') : 'Click a column header on the sheet, then click that value on the PDF.' }}</span>
+        <label class="inline-flex items-center gap-1 ml-2 text-[12px]">
+          <input type="checkbox" v-model="recipeTeach.line" class="accent-ink-900" />
+          Repeats on each line
+        </label>
+        <button class="ml-auto rounded-md bg-ink-900 text-gold px-2 py-1 text-[12px] font-semibold" @click="saveRecipe">Save recipe</button>
+        <button class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="stopRecipeTeach">Done</button>
       </div>
       <div class="flex-1 flex flex-col md:flex-row min-h-0 relative">
         <!-- Sidebar overlay (mobile) -->
@@ -342,8 +360,20 @@
               <div class="text-sm font-medium">Drop a PDF, screenshot, or EDI file</div>
               <p class="text-xs text-mute mt-1 max-w-xs">Chrome will preview PDFs and images here. Text and EDI files open as monospace. You can also paste a screenshot with Ctrl+V. Files stay in this session only.</p>
             </div>
-            <div v-else class="h-full rounded-xl border border-line bg-ink-950 overflow-hidden relative">
-              <iframe v-if="activeDoc.kind==='pdf'" :key="pdfViewerSrc" :src="pdfViewerSrc" class="w-full h-full bg-white" title="PDF preview"></iframe>
+            <div v-else class="h-full rounded-xl border border-line bg-ink-950 overflow-hidden relative" :class="recipeTeach.active && 'pdf-teach'">
+              <div v-if="activeDoc.kind==='pdf'" class="h-full overflow-auto bg-white">
+                <div v-if="!pdfView.pages.length" class="h-full grid place-items-center text-ink-900 text-sm">Reading PDF…</div>
+                <div v-for="page in pdfView.pages" :key="page.num" class="pdf-page mx-auto" :style="{ maxWidth: '100%' }">
+                  <canvas :id="'pdf-canvas-' + page.num" :width="page.width" :height="page.height"></canvas>
+                  <div class="pdf-hits">
+                    <button v-for="(it, i) in page.items" :key="i" type="button" class="pdf-hit"
+                      :class="pdfHitClass(page, it)"
+                      :style="pdfItemStyle(it)"
+                      :title="it.str"
+                      @click.stop="onPdfTextClick(page, it)"></button>
+                  </div>
+                </div>
+              </div>
               <div v-else-if="activeDoc.kind==='image'" class="h-full overflow-auto grid place-items-center bg-ink-950">
                 <img :src="activeDoc.url" :alt="activeDoc.name" class="max-w-full" :style="{ transform: 'scale(' + imgZoom + ')', transformOrigin: 'top center' }" />
               </div>
@@ -354,11 +384,6 @@
                   <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="imgZoom=Math.max(.4, imgZoom-.1)">−</button>
                   <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="imgZoom=1">Fit</button>
                   <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="imgZoom=Math.min(3, imgZoom+.1)">+</button>
-                </template>
-                <template v-else-if="activeDoc.kind==='pdf'">
-                  <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="nudgePdfZoom(-25)">−</button>
-                  <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="pdfZoom='page-width'">Page width</button>
-                  <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="nudgePdfZoom(25)">+</button>
                 </template>
               </div>
             </div>
@@ -480,7 +505,7 @@
                     </th>
                     <th v-for="col in visibleColumns" :key="col.id"
                       class="font-medium text-left px-2 py-2 cursor-pointer select-none"
-                      :class="[dragOverColId===col.id && 'th-drop', isColSelected(col) && 'col-sel']"
+                      :class="[dragOverColId===col.id && 'th-drop', isColSelected(col) && 'col-sel', recipeTeach.active && recipeTeach.colId===col.id && 'col-sel']"
                       :style="{ width: (col.width || 160) + 'px' }"
                       @mousedown="onHeaderMouseDown($event, col)"
                       @mouseenter="onHeaderMouseEnter(col)"
@@ -953,7 +978,7 @@
 
       <!-- Client recipes -->
       <modal-frame v-if="recipeOpen" title="Client order recipes" wide @close="recipeOpen=false">
-        <p class="text-sm text-mute mb-3">A recipe is one client’s layout. Name it Rema, tell ForgeGrid how to recognise their PDF, then map each value to a column on the sheet you already built. Operators pick that recipe when they drop the next Rema order.</p>
+        <p class="text-sm text-mute mb-3">Name the client, pick the sheet, then teach it on a PDF: click a column, click the value on the page, save.</p>
         <div class="grid md:grid-cols-[11rem_1fr] gap-3">
           <div class="space-y-1">
             <button v-for="r in store.recipes" :key="r.id" class="w-full text-left rounded-lg border px-2 py-1.5 text-sm truncate" :class="recipeDraft.id===r.id ? 'border-teal bg-ink-900' : 'border-line hover:bg-ink-800'" @click="editRecipe(r)">{{ r.name }}</button>
@@ -966,7 +991,6 @@
             </label>
             <label class="block text-sm">Recognise this PDF when it contains
               <input v-model.trim="recipeDraft.detect" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2 font-mono text-[12px]" placeholder="REMA, REMA Grønt" :disabled="mode!=='architect'" />
-              <span class="block text-[11px] text-mute mt-1">Comma-separated words. If several recipes match, the one with the most hits wins. You can still pick Rema by hand.</span>
             </label>
             <div class="grid sm:grid-cols-2 gap-2">
               <label class="text-sm">Header sheet
@@ -997,65 +1021,22 @@
               </label>
             </div>
             <div>
-              <div class="flex items-center justify-between mb-1">
-                <div class="text-sm font-medium">Header fields → cells</div>
-                <button v-if="mode==='architect'" class="text-[12px] text-teal" @click="addRecipeHeaderField">+ Field</button>
+              <div class="text-sm font-medium mb-1">Mapped from the PDF</div>
+              <p v-if="!(recipeDraft.maps && recipeDraft.maps.length)" class="text-[12px] text-mute">Nothing mapped yet. Open a PDF, then Teach on PDF.</p>
+              <div v-for="(m, i) in (recipeDraft.maps || [])" :key="m.id" class="flex flex-wrap items-center gap-2 rounded-lg border border-line px-2 py-1.5 mb-1 text-sm">
+                <span class="text-teal">{{ recipeMapColumnName(m) }}</span>
+                <span class="text-mute">←</span>
+                <span class="font-mono text-[12px]">{{ m.sample }}</span>
+                <span v-if="m.label" class="text-[11px] text-mute">after “{{ m.label }}”</span>
+                <span class="text-[11px] rounded px-1.5 py-0.5 bg-ink-900 text-mute">{{ m.role === 'line' ? 'each line' : 'once' }}</span>
+                <button v-if="mode==='architect'" class="ml-auto text-[11px] text-red-300" @click="recipeDraft.maps.splice(i,1)">Remove</button>
               </div>
-              <div class="space-y-2">
-                <div v-for="(f, i) in recipeDraft.headerFields" :key="f.id" class="rounded-lg border border-line p-2 grid sm:grid-cols-2 gap-2">
-                  <input v-model.trim="f.label" class="rounded-md bg-ink-900 border border-line px-2 py-1 text-sm" placeholder="Label" :disabled="mode!=='architect'" />
-                  <select v-model="f.columnId" class="rounded-md bg-ink-900 border border-line px-2 py-1 text-sm" :disabled="mode!=='architect'">
-                    <option value="">Skip this field</option>
-                    <option v-for="c in recipeHeaderColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
-                  </select>
-                  <input v-model.trim="f.regex" class="sm:col-span-2 rounded-md bg-ink-900 border border-line px-2 py-1 font-mono text-[11px]" placeholder="Regex with a capture group, e.g. Ordre\s+(KO\d+)" :disabled="mode!=='architect'" />
-                  <label class="text-[11px] text-mute">Group
-                    <input v-model.number="f.group" type="number" min="0" class="ml-1 w-14 rounded-md bg-ink-900 border border-line px-1 py-0.5" :disabled="mode!=='architect'" />
-                  </label>
-                  <label class="text-[11px] text-mute">Transform
-                    <select v-model="f.transform" class="ml-1 rounded-md bg-ink-900 border border-line px-1 py-0.5" :disabled="mode!=='architect'">
-                      <option value="text">text</option>
-                      <option value="number">number</option>
-                      <option value="number-dk">Danish number (73,50)</option>
-                      <option value="date-dk">Danish date (26-11-26)</option>
-                    </select>
-                  </label>
-                  <button v-if="mode==='architect'" class="text-[11px] text-red-300 sm:col-span-2 text-left" @click="recipeDraft.headerFields.splice(i,1)">Remove field</button>
-                </div>
-              </div>
-            </div>
-            <label class="block text-sm">Line-item regex (optional)
-              <input v-model.trim="recipeDraft.lineRegex" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2 font-mono text-[11px]" placeholder="(\d{6})\s+(.+?)\s+(\d+)\s+(Ks\.|Kolli)\s+([\d.]+,\d{2})" :disabled="mode!=='architect'" />
-            </label>
-            <div v-if="recipeDraft.lineTableId">
-              <div class="flex items-center justify-between mb-1">
-                <div class="text-sm font-medium">Line groups → columns</div>
-                <button v-if="mode==='architect'" class="text-[12px] text-teal" @click="addRecipeLineField">+ Group map</button>
-              </div>
-              <div v-for="(f, i) in recipeDraft.lineFields" :key="i" class="flex flex-wrap gap-2 items-center mb-1">
-                <span class="text-[11px] text-mute">Group</span>
-                <input v-model.number="f.group" type="number" min="1" class="w-14 rounded-md bg-ink-900 border border-line px-1 py-1 text-sm" :disabled="mode!=='architect'" />
-                <select v-model="f.columnId" class="flex-1 min-w-[8rem] rounded-md bg-ink-900 border border-line px-2 py-1 text-sm" :disabled="mode!=='architect'">
-                  <option value="">Skip</option>
-                  <option v-for="c in recipeLineColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
-                </select>
-                <select v-model="f.transform" class="rounded-md bg-ink-900 border border-line px-1 py-1 text-[11px]" :disabled="mode!=='architect'">
-                  <option value="text">text</option>
-                  <option value="number">number</option>
-                  <option value="number-dk">Danish number</option>
-                </select>
-                <button v-if="mode==='architect'" class="text-[11px] text-red-300" @click="recipeDraft.lineFields.splice(i,1)">Remove</button>
-              </div>
-            </div>
-            <div v-if="recipePreview" class="rounded-lg border border-line bg-ink-900 p-2">
-              <div class="text-[11px] uppercase tracking-wide text-mute mb-1">Last read from this PDF</div>
-              <pre class="text-[11px] font-mono whitespace-pre-wrap max-h-40 overflow-auto">{{ recipePreview }}</pre>
             </div>
             <div class="flex flex-wrap gap-2 justify-between">
               <button v-if="mode==='architect' && recipeDraft.id" class="text-sm text-red-300" @click="deleteRecipe">Delete recipe</button>
               <span v-else></span>
               <div class="flex gap-2">
-                <button class="text-sm rounded-lg border border-line px-3 py-1.5" @click="testRecipeOnDoc" :disabled="!activeDoc">Test on open PDF</button>
+                <button v-if="mode==='architect'" class="text-sm rounded-lg bg-teal text-ink-900 font-semibold px-3 py-1.5" @click="startRecipeTeach">Teach on PDF</button>
                 <button v-if="mode==='architect'" class="text-sm rounded-lg bg-gold text-ink-900 font-semibold px-3 py-1.5" @click="saveRecipe">Save recipe</button>
               </div>
             </div>
@@ -1457,6 +1438,7 @@
       store.recipes.forEach((r) => {
         if (!Array.isArray(r.headerFields)) r.headerFields = [];
         if (!Array.isArray(r.lineFields)) r.lineFields = [];
+        if (!Array.isArray(r.maps)) r.maps = [];
         if (r.detect == null) r.detect = '';
       });
       return store;
@@ -2300,7 +2282,8 @@
           { group: 1, columnId: l.notes, transform: 'text', label: 'Item number' },
           { group: 3, columnId: l.qty, transform: 'number', label: 'Qty' },
           { group: 5, columnId: l.price, transform: 'number-dk', label: 'Unit price' }
-        ]
+        ],
+        maps: []
       };
     }
 
@@ -2387,6 +2370,142 @@
         });
         return data;
       });
+      return { header, lines };
+    }
+
+    function guessTransform(s) {
+      const t = String(s || '').trim();
+      if (/^\d{1,2}[-./]\d{1,2}[-./]\d{2,4}$/.test(t)) return 'date-dk';
+      if (/^\d{1,3}(\.\d{3})*,\d{2}$/.test(t) || /^\d+,\d{2}$/.test(t)) return 'number-dk';
+      if (/^\d+$/.test(t)) return 'number';
+      return 'text';
+    }
+
+    function pdfItemRect(item, viewport) {
+      const x = item.transform[4];
+      const y = item.transform[5];
+      const w = item.width || 0;
+      const h = item.height || Math.abs(item.transform[3]) || Math.abs(item.transform[0]) || 8;
+      const a = viewport.convertToViewportPoint(x, y);
+      const b = viewport.convertToViewportPoint(x + w, y + h);
+      const left = Math.min(a[0], b[0]);
+      const top = Math.min(a[1], b[1]);
+      return { x: left, y: top, w: Math.max(Math.abs(b[0] - a[0]), 3), h: Math.max(Math.abs(b[1] - a[1]), 6) };
+    }
+
+    function explodePdfWords(items) {
+      const out = [];
+      items.forEach((it) => {
+        const raw = String(it.str || '');
+        const parts = raw.split(/(\s+)/);
+        const words = parts.filter((p) => p && !/^\s+$/.test(p));
+        if (words.length <= 1) {
+          if (raw.trim()) out.push(it);
+          return;
+        }
+        let acc = 0;
+        const total = raw.length || 1;
+        parts.forEach((p) => {
+          if (!p) return;
+          const frac = p.length / total;
+          if (p.trim()) {
+            out.push({
+              str: p.trim(),
+              nx: it.nx + acc * it.nw,
+              ny: it.ny,
+              nw: Math.max(frac * it.nw, 0.004),
+              nh: it.nh
+            });
+          }
+          acc += frac;
+        });
+      });
+      out.sort((a, b) => (b.nw * b.nh) - (a.nw * a.nh));
+      return out;
+    }
+
+    function leftLabelFor(items, hit) {
+      const cy = hit.ny + hit.nh / 2;
+      const left = items.filter((it) => {
+        if (it === hit) return false;
+        const icy = it.ny + it.nh / 2;
+        return Math.abs(icy - cy) < 0.015 && (it.nx + it.nw) <= hit.nx + 0.004 && String(it.str).trim().length > 1;
+      }).sort((a, b) => (b.nx + b.nw) - (a.nx + a.nw));
+      return left[0] ? String(left[0].str).replace(/\s+/g, ' ').trim() : '';
+    }
+
+    function nearestPdfItem(items, nx, ny, maxX, maxY) {
+      let best = null;
+      let bestD = 99;
+      items.forEach((it) => {
+        const cx = it.nx + it.nw / 2;
+        const cy = it.ny + it.nh / 2;
+        const dx = Math.abs(cx - nx);
+        const dy = Math.abs(cy - ny);
+        if (dx > maxX || dy > maxY) return;
+        const d = dx * 1.2 + dy;
+        if (d < bestD) { bestD = d; best = it; }
+      });
+      return best;
+    }
+
+    function readClickMap(pages, map) {
+      const page = pages[(map.page || 1) - 1];
+      if (!page) return '';
+      const items = page.items || [];
+      const label = String(map.label || '').trim();
+      if (label) {
+        const labs = items.filter((it) => String(it.str).replace(/\s+/g, ' ').trim().toLowerCase() === label.toLowerCase());
+        labs.sort((a, b) => Math.abs((a.ny + a.nh / 2) - (map.ny + map.nh / 2)) - Math.abs((b.ny + b.nh / 2) - (map.ny + map.nh / 2)));
+        const L = labs[0];
+        if (L) {
+          const cy = L.ny + L.nh / 2;
+          const right = items.filter((it) => it !== L && String(it.str).trim() && Math.abs((it.ny + it.nh / 2) - cy) < 0.015 && it.nx >= L.nx + L.nw - 0.01)
+            .sort((a, b) => a.nx - b.nx);
+          if (right[0]) return String(right[0].str).trim();
+        }
+      }
+      const hit = nearestPdfItem(items, map.nx + map.nw / 2, map.ny + map.nh / 2, 0.08, 0.04);
+      return hit ? String(hit.str).trim() : '';
+    }
+
+    function extractFromMaps(pages, recipe) {
+      const maps = recipe.maps || [];
+      const header = {};
+      maps.filter((m) => m.role !== 'line').forEach((m) => {
+        header[m.columnId] = transformRecipeValue(readClickMap(pages, m), m.transform);
+      });
+      const lineMaps = maps.filter((m) => m.role === 'line');
+      const lines = [];
+      if (lineMaps.length) {
+        const page = pages[(lineMaps[0].page || 1) - 1];
+        const items = (page && page.items) || [];
+        const m0 = lineMaps[0];
+        const cx0 = m0.nx + m0.nw / 2;
+        const hits = items.filter((it) => Math.abs((it.nx + it.nw / 2) - cx0) < 0.04 && String(it.str).trim());
+        const clusters = [];
+        hits.map((it) => it.ny + it.nh / 2).sort((a, b) => a - b).forEach((y) => {
+          const last = clusters[clusters.length - 1];
+          if (last && Math.abs(last.y - y) < 0.01) {
+            last.y = (last.y * last.n + y) / (last.n + 1);
+            last.n += 1;
+          } else clusters.push({ y, n: 1 });
+        });
+        clusters.forEach((c) => {
+          const row = {};
+          let filled = 0;
+          lineMaps.forEach((m) => {
+            const it = nearestPdfItem(items, m.nx + m.nw / 2, c.y, 0.045, 0.012);
+            if (!it) return;
+            const val = transformRecipeValue(it.str, m.transform);
+            if (val === '' || val == null) return;
+            if ((m.transform === 'number' || m.transform === 'number-dk') && typeof val !== 'number') return;
+            row[m.columnId] = val;
+            filled += 1;
+          });
+          if (filled) lines.push(row);
+        });
+      }
       return { header, lines };
     }
 
@@ -3023,7 +3142,9 @@
           selectedRecipeId: '',
           recipeBusy: false,
           recipeHint: '',
-          recipePreview: ''
+          recipePreview: '',
+          recipeTeach: { active: false, wait: 'column', colId: '', colName: '', line: false },
+          pdfView: { pages: [], src: '' }
         };
       },
       computed: {
@@ -3268,6 +3389,10 @@
         store: {
           deep: true,
           handler() { this.schedulePersist(); }
+        },
+        activeDoc(doc) {
+          if (doc && doc.kind === 'pdf' && doc.url) this.loadPdfView(doc);
+          else this.pdfView = { pages: [], src: '' };
         }
       },
       methods: {
@@ -4158,6 +4283,11 @@
           if (this._didResize) { this._didResize = false; return; }
           const t = e.target;
           if (t && t.closest && (t.closest('.col-resizer') || t.closest('button') || t.closest('[draggable="true"]'))) return;
+          if (this.recipeTeach.active) {
+            e.preventDefault();
+            this.pickRecipeColumn(col);
+            return;
+          }
           this.closeCtxMenu();
           this.selectingDrag = true;
           this.selectMode = 'cols';
@@ -4984,6 +5114,8 @@
           this.recipeDraft = cur ? clone(cur) : this.freshRecipe();
         },
         freshRecipe() {
+          const t = this.currentTable;
+          const attach = t && t.columns.find((c) => c.type === 'attachment');
           return {
             id: uid('rcp'),
             name: 'New client',
@@ -4991,19 +5123,139 @@
             headerTableId: this.currentTableId || '',
             lineTableId: '',
             lineLinkColumnId: '',
-            attachColumnId: '',
-            headerFields: [{ id: uid('hf'), label: 'Order number', regex: '', group: 1, columnId: '', transform: 'text' }],
+            attachColumnId: attach ? attach.id : '',
+            headerFields: [],
             lineRegex: '',
-            lineFields: []
+            lineFields: [],
+            maps: []
           };
         },
         newRecipe() { this.recipeDraft = this.freshRecipe(); },
-        editRecipe(r) { this.recipeDraft = clone(r); },
-        addRecipeHeaderField() {
-          this.recipeDraft.headerFields.push({ id: uid('hf'), label: 'Field', regex: '', group: 1, columnId: '', transform: 'text' });
+        editRecipe(r) { this.recipeDraft = clone(r); if (!this.recipeDraft.maps) this.recipeDraft.maps = []; },
+        recipeMapColumnName(m) {
+          const tables = this.store.tables || [];
+          for (let i = 0; i < tables.length; i++) {
+            const c = findColumn(tables[i], m.columnId);
+            if (c) return tables[i].name + ' · ' + c.name;
+          }
+          return m.columnId;
         },
-        addRecipeLineField() {
-          this.recipeDraft.lineFields.push({ group: 1, columnId: '', transform: 'text' });
+        startRecipeTeach() {
+          if (!this.recipeDraft.id) return;
+          if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
+          this.saveRecipe();
+          this.recipeOpen = false;
+          this.splitOpen = true;
+          this.view = 'grid';
+          const ht = findTable(this.store, this.recipeDraft.headerTableId);
+          if (ht) {
+            this.currentTableId = ht.id;
+            this.currentGroupId = ht.groupId;
+          }
+          this.recipeTeach = { active: true, wait: 'column', colId: '', colName: '', line: false };
+          this.selectedRecipeId = this.recipeDraft.id;
+          if (this.splitWidth < 46) this.splitWidth = 48;
+          this.recipeHint = this.activeDoc && this.activeDoc.kind === 'pdf'
+            ? 'Click a column header, then click the matching text on the PDF.'
+            : 'Open a PDF first, then click a column, then click the value on the page.';
+        },
+        stopRecipeTeach() {
+          this.saveRecipe();
+          this.recipeTeach = { active: false, wait: 'column', colId: '', colName: '', line: false };
+        },
+        pickRecipeColumn(col) {
+          if (!col || !this.recipeTeach.active) return;
+          const onLineSheet = this.currentTable && this.recipeDraft.lineTableId && this.currentTable.id === this.recipeDraft.lineTableId;
+          this.recipeTeach.colId = col.id;
+          this.recipeTeach.colName = col.name;
+          this.recipeTeach.wait = 'pdf';
+          if (onLineSheet) this.recipeTeach.line = true;
+          this.recipeHint = 'Click “' + col.name + '” on the PDF' + (this.recipeTeach.line ? ' (this repeats on each line).' : '.');
+          this.toast('Now click that value on the PDF.');
+        },
+        pdfItemStyle(it) {
+          return {
+            left: (it.nx * 100) + '%',
+            top: (it.ny * 100) + '%',
+            width: Math.max(it.nw * 100, 0.8) + '%',
+            height: Math.max(it.nh * 100, 0.8) + '%'
+          };
+        },
+        pdfHitClass(page, it) {
+          const maps = (this.recipeDraft && this.recipeDraft.maps) || [];
+          const mapped = maps.some((m) => m.page === page.num && Math.abs(m.nx - it.nx) < 0.008 && Math.abs(m.ny - it.ny) < 0.008);
+          return {
+            mapped,
+            pick: this.recipeTeach.active && this.recipeTeach.wait === 'pdf'
+          };
+        },
+        onPdfTextClick(page, it) {
+          if (!this.recipeTeach.active || this.recipeTeach.wait !== 'pdf' || !this.recipeTeach.colId) return;
+          let sample = String(it.str || '').replace(/\s+/g, ' ').trim();
+          if (!sample) return;
+          const lab = leftLabelFor(page.items, it);
+          if (lab && sample.toLowerCase().indexOf(lab.toLowerCase()) === 0) {
+            sample = sample.slice(lab.length).replace(/^[\s:]+/, '') || sample;
+          }
+          const map = {
+            id: uid('map'),
+            columnId: this.recipeTeach.colId,
+            role: this.recipeTeach.line ? 'line' : 'header',
+            page: page.num,
+            nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh,
+            sample,
+            label: lab,
+            transform: guessTransform(sample)
+          };
+          if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
+          this.recipeDraft.maps = this.recipeDraft.maps.filter((m) => !(m.columnId === map.columnId && m.role === map.role));
+          this.recipeDraft.maps.push(map);
+          if (!this.recipeDraft.detect) this.recipeDraft.detect = sample;
+          this.saveRecipe();
+          this.recipeTeach.wait = 'column';
+          this.recipeTeach.colId = '';
+          this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. Click another column, or Save.';
+          this.toast('Mapped ' + map.sample + ' → column.');
+        },
+        async loadPdfView(doc) {
+          if (!doc || !doc.url || !window.pdfjsLib) return;
+          if (this.pdfView.src === doc.url && this.pdfView.pages.length) return;
+          this._pdfLoad = (this._pdfLoad || 0) + 1;
+          const token = this._pdfLoad;
+          this.pdfView = { pages: [], src: doc.url };
+          try {
+            const pdf = await window.pdfjsLib.getDocument({ url: doc.url, withCredentials: false }).promise;
+            const pages = [];
+            for (let p = 1; p <= pdf.numPages; p++) {
+              const page = await pdf.getPage(p);
+              const viewport = page.getViewport({ scale: 1.35 });
+              const content = await page.getTextContent();
+              const items = explodePdfWords(content.items.filter((it) => it.str && String(it.str).trim()).map((it) => {
+                const r = pdfItemRect(it, viewport);
+                return {
+                  str: it.str,
+                  nx: r.x / viewport.width,
+                  ny: r.y / viewport.height,
+                  nw: r.w / viewport.width,
+                  nh: r.h / viewport.height
+                };
+              }));
+              pages.push({ num: p, width: viewport.width, height: viewport.height, items, viewport, page });
+            }
+            if (token !== this._pdfLoad) return;
+            this.pdfView = { pages, src: doc.url };
+            await this.$nextTick();
+            if (token !== this._pdfLoad) return;
+            for (let i = 0; i < pages.length; i++) {
+              const pg = pages[i];
+              const canvas = document.getElementById('pdf-canvas-' + pg.num);
+              if (!canvas) continue;
+              const ctx = canvas.getContext('2d');
+              await pg.page.render({ canvasContext: ctx, viewport: pg.viewport }).promise;
+            }
+          } catch (e) {
+            this.recipeHint = 'Could not render this PDF for clicking.';
+          }
         },
         saveRecipe() {
           if (!this.recipeDraft.name) return this.toast('Give the recipe a name, for example Rema.', 'warn');
@@ -5023,21 +5275,6 @@
           if (this.selectedRecipeId && !this.store.recipes.some((r) => r.id === this.selectedRecipeId)) this.selectedRecipeId = '';
           this.audit('recipe.delete', name, '');
         },
-        async testRecipeOnDoc() {
-          const doc = this.activeDoc;
-          if (!doc) return this.toast('Open a PDF first.', 'warn');
-          this.recipeBusy = true;
-          try {
-            if (!doc.text) doc.text = await this.readDocText(doc);
-            const extracted = runRecipeExtract(doc.text, this.recipeDraft);
-            const lines = extracted.lines.map((row, i) => 'Line ' + (i + 1) + ': ' + JSON.stringify(row)).join('\n');
-            const heads = Object.values(extracted.header).map((h) => (h.label || 'field') + ': ' + (h.value === '' ? '(empty)' : h.value)).join('\n');
-            this.recipePreview = (doc.text || '(no text)') + '\n\n— mapped —\n' + heads + (lines ? '\n' + lines : '\n(no line items)');
-          } catch (e) {
-            this.recipePreview = 'Could not read this file.';
-          }
-          this.recipeBusy = false;
-        },
         async runRecipeOnDoc() {
           const recipe = this.store.recipes.find((r) => r.id === this.selectedRecipeId);
           const doc = this.activeDoc;
@@ -5046,7 +5283,9 @@
           this.recipeHint = 'Reading ' + recipe.name + '…';
           try {
             if (!doc.text) doc.text = await this.readDocText(doc);
+            if (doc.kind === 'pdf' && (!this.pdfView.pages.length || this.pdfView.src !== doc.url)) await this.loadPdfView(doc);
             const extracted = runRecipeExtract(doc.text, recipe);
+            const click = (recipe.maps || []).length && this.pdfView.pages.length ? extractFromMaps(this.pdfView.pages, recipe) : { header: {}, lines: [] };
             const headerTable = findTable(this.store, recipe.headerTableId) || this.currentTable;
             if (!headerTable) {
               this.toast('Pick a header sheet on the recipe.', 'warn');
@@ -5058,6 +5297,11 @@
             (recipe.headerFields || []).forEach((f) => {
               const col = findColumn(headerTable, f.columnId);
               const val = recipeFieldValue(doc.text, f);
+              if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
+            });
+            Object.keys(click.header).forEach((colId) => {
+              const col = findColumn(headerTable, colId);
+              const val = click.header[colId];
               if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
             });
             if (recipe.statusColumnId && recipe.statusValue) {
@@ -5081,8 +5325,9 @@
               }
             }
             const lineTable = findTable(this.store, recipe.lineTableId);
-            if (lineTable && extracted.lines.length) {
-              extracted.lines.forEach((row) => {
+            const lineRows = click.lines.length ? click.lines : extracted.lines;
+            if (lineTable && lineRows.length) {
+              lineRows.forEach((row) => {
                 const lr = this.blankRecord(lineTable);
                 lineTable.records.push(lr);
                 if (recipe.lineLinkColumnId) {
@@ -5101,13 +5346,13 @@
             const first = headerTable.columns[0];
             if (first) this.applySelection({ recId: rec.id, colId: first.id }, { recId: rec.id, colId: first.id });
             this.view = this.splitOpen ? 'form' : 'grid';
-            const n = extracted.lines.length;
+            const n = lineRows.length;
             this.recipeHint = 'Filled from ' + recipe.name + (n ? ' · ' + n + ' line' + (n === 1 ? '' : 's') : '') + '. Check the row, then edit anything the PDF read poorly.';
             this.audit('recipe.apply', recipe.name, doc.name);
             this.toast('Filled a ' + headerTable.name + ' row from ' + recipe.name + '.');
           } catch (e) {
             this.recipeHint = 'Could not apply this recipe to the file.';
-            this.toast('Recipe fill failed. Try Test on open PDF in Recipes.', 'error');
+            this.toast('Recipe fill failed. Check the PDF mapping in Recipes.', 'error');
           }
           this.recipeBusy = false;
         },
@@ -5346,6 +5591,12 @@
           if (got.lines.length !== 2) console.warn('Rema line extract failed', got.lines);
           if (got.lines[0][remR.lineFields[1].columnId] !== 192) console.warn('Rema qty extract failed', got.lines[0]);
           if (got.lines[0][remR.lineFields[2].columnId] !== 73.5) console.warn('Rema price extract failed', got.lines[0]);
+          const clickPages = [{ num: 1, items: [
+            { str: 'Ordre', nx: 0.1, ny: 0.1, nw: 0.08, nh: 0.02 },
+            { str: 'KO428144', nx: 0.2, ny: 0.1, nw: 0.12, nh: 0.02 }
+          ] }];
+          const clickGot = extractFromMaps(clickPages, { maps: [{ columnId: 'po', role: 'header', page: 1, nx: 0.2, ny: 0.1, nw: 0.12, nh: 0.02, sample: 'KO428144', label: 'Ordre', transform: 'text' }] });
+          if (clickGot.header.po !== 'KO428144') console.warn('click map extract failed', clickGot);
           const spec = snapshotCellRule(cust2.records[0], city2);
           spec.rule.formula = { expression: 'XLOOKUP(C1, "Products", "Item No", "Name")', resultType: 'auto' };
           const shifted = shiftA1InText(spec.rule.formula.expression, 1, 0);
