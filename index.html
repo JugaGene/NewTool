@@ -993,11 +993,11 @@
         </template>
       </div>
 
-      <div v-if="sheetEdit.open" class="fixed z-[85] rounded-lg border border-line bg-ink-850 shadow-panel p-2" :style="sheetEdit.style" @mousedown.stop @click.stop>
-        <attach-cell v-if="sheetEdit.col && effectiveCol(sheetEdit.rec, sheetEdit.col).type==='attachment'"
+      <div v-if="sheetEdit.open && sheetEdit.rec && sheetEdit.col" class="fixed z-[85] rounded-lg border border-line bg-ink-850 shadow-panel p-2" :style="sheetEdit.style" @mousedown.stop @click.stop>
+        <attach-cell v-if="effectiveCol(sheetEdit.rec, sheetEdit.col).type==='attachment'"
           :column="effectiveCol(sheetEdit.rec, sheetEdit.col)" :record="sheetEdit.rec" variant="form" :locked="!!sheetEdit.rec.locked"
-          @commit="commitSheetEdit" @open="openAttachment" />
-        <field-input v-else :column="effectiveCol(sheetEdit.rec, sheetEdit.col)" :record="sheetEdit.rec" :table="currentTable" :store="store" variant="grid" @commit="commitSheetEdit" @cancel="sheetEdit.open=false" />
+          @commit="commitSheetEdit" @open="openAttachment"></attach-cell>
+        <field-input v-else :column="effectiveCol(sheetEdit.rec, sheetEdit.col)" :record="sheetEdit.rec" :table="currentTable" :store="store" variant="grid" @commit="commitSheetEdit" @cancel="sheetEdit.open=false"></field-input>
       </div>
       <div v-if="fillMenu.open" class="ctx-menu" :style="{ left: fillMenu.x + 'px', top: fillMenu.y + 'px', minWidth: '160px' }" @mousedown.stop @click.stop>
         <button type="button" @click="chooseFill('copy')"><span>Copy cells</span></button>
@@ -3173,7 +3173,9 @@
           this.destroySheet();
           const vm = this;
           const data = this.sheetMatrix();
-          const inst = jss(el, {
+          let inst;
+          try {
+          inst = jss(el, {
             data,
             columns: this.sheetColumnDefs(),
             tableOverflow: true,
@@ -3305,6 +3307,10 @@
               }
             }
           });
+          } catch (err) {
+            el.innerHTML = '<div class="p-6 text-sm text-mute">The sheet canvas failed to start. Refresh this page.</div>';
+            return;
+          }
           this._jexcel = Array.isArray(inst) ? inst[0] : (inst || el.jspreadsheet && el.jspreadsheet[0] || el.jexcel);
           this.$nextTick(() => {
             const head = el.querySelectorAll('thead td:not(.jexcel_selectall)');
