@@ -984,13 +984,68 @@
             </div>
             <div>
               <div class="text-sm font-medium mb-1">Clicked on the PDF</div>
+              <p class="text-[12px] text-mute mb-2">After a click, choose what to do with that value: keep the PDF text, look it up and <strong class="text-mist">link</strong> a row, copy another field from that row, or type a fixed value.</p>
               <p v-if="!(recipeDraft.maps && recipeDraft.maps.length)" class="text-[12px] text-mute mb-2">Nothing clicked yet. Open a PDF with Docs, then Teach on PDF.</p>
-              <div v-for="(m, i) in (recipeDraft.maps || [])" :key="m.id" class="flex flex-wrap items-center gap-2 rounded-lg border border-line px-2 py-1.5 mb-1 text-sm">
-                <span class="text-teal">{{ recipeMapColumnName(m) }}</span>
-                <span class="text-mute">←</span>
-                <span class="font-mono text-[12px]">{{ m.sample }}</span>
-                <span class="text-[11px] rounded px-1.5 py-0.5 bg-ink-900 text-mute">{{ m.role === 'line' ? 'each line' : 'once' }}</span>
-                <button v-if="mode==='architect'" class="ml-auto text-[11px] text-red-300" @click="recipeDraft.maps.splice(i,1)">Remove</button>
+              <div v-for="(m, i) in (recipeDraft.maps || [])" :key="m.id" class="rounded-lg border border-line p-2 mb-2 space-y-2 text-sm">
+                <div class="flex flex-wrap items-center gap-2">
+                  <select v-model="m.columnId" class="flex-1 min-w-[8rem] rounded-md bg-ink-900 border border-line px-2 py-1" :disabled="mode!=='architect'">
+                    <option v-for="c in mapTargetColumns(m)" :key="c.id" :value="c.id">{{ c.name }}</option>
+                  </select>
+                  <span class="text-mute">←</span>
+                  <span class="font-mono text-[12px]">{{ m.sample }}</span>
+                  <span class="text-[11px] rounded px-1.5 py-0.5 bg-ink-900 text-mute">{{ m.role === 'line' ? 'each line' : 'once' }}</span>
+                  <button v-if="mode==='architect'" class="ml-auto text-[11px] text-red-300" @click="recipeDraft.maps.splice(i,1)">Remove</button>
+                </div>
+                <label class="block text-[11px] text-mute">Put in that cell
+                  <select v-model="m.fill" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-2 py-1 text-[12px] text-mist" :disabled="mode!=='architect'" @change="ensureRecipeLookup(m)">
+                    <option value="pdf">the PDF text as-is</option>
+                    <option value="lookup">lookup / link a matching row</option>
+                    <option value="fixed">a fixed value I type</option>
+                  </select>
+                </label>
+                <input v-if="m.fill==='fixed'" v-model.trim="m.fixed" class="w-full rounded-md bg-ink-900 border border-line px-2 py-1 text-sm" placeholder="e.g. Draft" :disabled="mode!=='architect'" />
+                <div v-if="m.fill==='lookup' && m.lookup" class="grid sm:grid-cols-2 gap-2">
+                  <label class="text-[11px] text-mute">Look in sheet
+                    <select v-model="m.lookup.tableId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
+                      <option value="">—</option>
+                      <option v-for="t in store.tables" :key="t.id" :value="t.id">{{ t.name }}</option>
+                    </select>
+                  </label>
+                  <label class="text-[11px] text-mute">Match this PDF value to
+                    <select v-model="m.lookup.matchColumnId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
+                      <option value="">—</option>
+                      <option v-for="c in lookupColumns(m.lookup.tableId)" :key="c.id" :value="c.id">{{ c.name }}</option>
+                    </select>
+                  </label>
+                  <label class="text-[11px] text-mute">How to match
+                    <select v-model="m.lookup.match" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
+                      <option value="contains">contains (REMA ≈ REMA Grønt)</option>
+                      <option value="equals">exact (306832 = 306832)</option>
+                    </select>
+                  </label>
+                  <label class="text-[11px] text-mute">Write into the mapped cell
+                    <select v-model="m.lookup.out" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
+                      <option value="link">link to that row</option>
+                      <option v-for="c in lookupColumns(m.lookup.tableId)" :key="c.id" :value="c.id">copy “{{ c.name }}”</option>
+                    </select>
+                  </label>
+                  <div class="sm:col-span-2 space-y-1">
+                    <div class="text-[11px] text-mute">Also fill other cells from that same match</div>
+                    <div v-for="(a, ai) in (m.lookup.also || [])" :key="ai" class="flex flex-wrap gap-1 items-center">
+                      <select v-model="a.columnId" class="flex-1 min-w-[7rem] rounded-md bg-ink-900 border border-line px-1 py-1 text-[12px]" :disabled="mode!=='architect'">
+                        <option value="">This sheet column…</option>
+                        <option v-for="c in mapTargetColumns(m)" :key="c.id" :value="c.id">{{ c.name }}</option>
+                      </select>
+                      <span class="text-mute text-[11px]">←</span>
+                      <select v-model="a.out" class="flex-1 min-w-[7rem] rounded-md bg-ink-900 border border-line px-1 py-1 text-[12px]" :disabled="mode!=='architect'">
+                        <option value="link">the linked row</option>
+                        <option v-for="c in lookupColumns(m.lookup.tableId)" :key="c.id" :value="c.id">copy {{ c.name }}</option>
+                      </select>
+                      <button v-if="mode==='architect'" type="button" class="text-[11px] text-red-300" @click="m.lookup.also.splice(ai,1)">Remove</button>
+                    </div>
+                    <button v-if="mode==='architect'" type="button" class="text-[12px] text-teal" @click="addMapAlso(m)">+ Also fill another column</button>
+                  </div>
+                </div>
               </div>
             </div>
             <div>
@@ -2549,7 +2604,7 @@
     }
 
     function emptyRecipeLookup() {
-      return { tableId: '', matchColumnId: '', out: 'link', match: 'contains' };
+      return { tableId: '', matchColumnId: '', out: 'link', match: 'contains', also: [] };
     }
 
     function recipeTextMatch(a, b, mode) {
@@ -2565,28 +2620,42 @@
       return tx.some((t) => ty.indexOf(t) >= 0);
     }
 
+    function findRecipeLookupRow(store, field, raw) {
+      if (!field || (field.fill && field.fill !== 'lookup') || !field.lookup || !field.lookup.tableId) return null;
+      const table = findTable(store, field.lookup.tableId);
+      if (!table) return null;
+      const matchCol = findColumn(table, field.lookup.matchColumnId);
+      if (!matchCol) return null;
+      const needle = String(raw == null ? '' : raw).trim();
+      const mode = field.lookup.match || 'contains';
+      return table.records.find((r) => {
+        const shown = formatDisplay(store, table, r, matchCol);
+        const stored = rawStored(r, matchCol);
+        return recipeTextMatch(needle, shown, mode) || recipeTextMatch(needle, stored, mode);
+      }) || null;
+    }
+
     function resolveRecipeFill(store, field, raw) {
       if (!field) return raw;
       const fill = field.fill || 'pdf';
       if (fill === 'fixed') return field.fixed != null && field.fixed !== '' ? field.fixed : '';
       if (fill !== 'lookup' || !field.lookup || !field.lookup.tableId) return raw;
       const table = findTable(store, field.lookup.tableId);
-      if (!table) return '';
-      const matchCol = findColumn(table, field.lookup.matchColumnId);
-      if (!matchCol) return '';
-      const needle = String(raw == null ? '' : raw).trim();
-      const mode = field.lookup.match || 'contains';
-      const hit = table.records.find((r) => {
-        const shown = formatDisplay(store, table, r, matchCol);
-        const stored = rawStored(r, matchCol);
-        return recipeTextMatch(needle, shown, mode) || recipeTextMatch(needle, stored, mode);
-      });
+      const hit = findRecipeLookupRow(store, field, raw);
       if (!hit) return '';
       const out = field.lookup.out;
       if (!out || out === 'link') return hit.id;
       const outCol = findColumn(table, out);
       if (!outCol) return hit.id;
       return rawStored(hit, outCol);
+    }
+
+    function lookupAlsoValue(store, field, also, hit) {
+      if (!hit || !also) return '';
+      if (!also.out || also.out === 'link') return hit.id;
+      const table = findTable(store, field.lookup && field.lookup.tableId);
+      const outCol = findColumn(table, also.out);
+      return outCol ? rawStored(hit, outCol) : '';
     }
 
     function matchLinkedRecord(store, col, raw) {
@@ -6425,7 +6494,8 @@
           if (this.undocked.recipes && this.panelMode !== 'recipes') return this.focusPopout('recipes');
           this.recipeOpen = true;
           const cur = this.store.recipes.find((r) => r.id === this.selectedRecipeId) || this.store.recipes[0];
-          this.recipeDraft = cur ? clone(cur) : this.freshRecipe();
+          if (cur) this.editRecipe(cur);
+          else this.recipeDraft = this.freshRecipe();
         },
         freshRecipe() {
           return {
@@ -6454,6 +6524,14 @@
             if (!f.fill) f.fill = 'pdf';
             if (!f.lookup) f.lookup = emptyRecipeLookup();
           });
+          (this.recipeDraft.maps || []).forEach((m) => {
+            if (!m.fill) m.fill = 'pdf';
+            if (!m.lookup) m.lookup = emptyRecipeLookup();
+            if (!m.lookup.also) m.lookup.also = [];
+          });
+        },
+        mapTargetColumns(m) {
+          return (m && m.role === 'line') ? this.recipeLineColumns : this.recipeHeaderColumns;
         },
         recipeMapColumnName(m) {
           const tables = this.store.tables || [];
@@ -6555,8 +6633,11 @@
               tableId: mapCol.link.tableId,
               matchColumnId: mapCol.link.searchColumnId || mapCol.link.matchColumnId || mapCol.link.displayColumnId,
               out: 'link',
-              match: 'contains'
+              match: 'contains',
+              also: []
             };
+          } else {
+            map.lookup = emptyRecipeLookup();
           }
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
           this.recipeDraft.maps = this.recipeDraft.maps.filter((m) => !(m.columnId === map.columnId && m.role === map.role));
@@ -6564,7 +6645,7 @@
           if (!this.recipeDraft.detect) this.recipeDraft.detect = sample;
           this.saveRecipe();
           this.recipeTeach.colId = '';
-          this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. Pick another column, or Done.';
+          this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
           this.toast('Mapped ' + sample + ' → column.');
         },
         async loadPdfView(doc) {
@@ -6613,7 +6694,26 @@
         },
         ensureRecipeLookup(f) {
           if (!f.lookup) f.lookup = emptyRecipeLookup();
+          if (!f.lookup.also) f.lookup.also = [];
           if (!f.fill) f.fill = 'pdf';
+        },
+        addMapAlso(m) {
+          this.ensureRecipeLookup(m);
+          m.lookup.also.push({ columnId: '', out: 'link' });
+        },
+        applyRecipeLookupAlso(table, rec, field, raw) {
+          if (!field || field.fill !== 'lookup' || !field.lookup || !table || !rec) return;
+          const extras = field.lookup.also || [];
+          if (!extras.length) return;
+          const hit = findRecipeLookupRow(this.store, field, raw);
+          if (!hit) return;
+          extras.forEach((a) => {
+            const col = findColumn(table, a.columnId);
+            if (!col) return;
+            let val = lookupAlsoValue(this.store, field, a, hit);
+            val = coerceRecipeCell(this.store, col, { fill: 'pdf' }, val);
+            if (val !== '' && val != null) this.setCell(rec, col, val, true, table);
+          });
         },
         addRecipeHeaderField() {
           this.recipeDraft.headerFields.push({ id: uid('hf'), label: 'Field', regex: '', group: 1, columnId: '', transform: 'text', fill: 'pdf', lookup: emptyRecipeLookup() });
@@ -6750,8 +6850,10 @@
             Object.keys(click.header).forEach((colId) => {
               const col = findColumn(headerTable, colId);
               const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role !== 'line');
-              const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, click.header[colId]);
+              const raw = click.header[colId];
+              const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
               if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
+              if (map) this.applyRecipeLookupAlso(headerTable, rec, map, raw);
             });
             if (recipe.statusColumnId && recipe.statusValue) {
               const sc = findColumn(headerTable, recipe.statusColumnId);
@@ -6789,8 +6891,10 @@
                 Object.keys(row).forEach((colId) => {
                   const col = findColumn(lineTable, colId);
                   const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role === 'line');
-                  const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, row[colId]);
+                  const raw = row[colId];
+                  const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
                   if (col && val !== '' && val != null) this.setCell(lr, col, val, true, lineTable);
+                  if (map) this.applyRecipeLookupAlso(lineTable, lr, map, raw);
                 });
               });
             } else if (lineTable && extracted.lines.length) {
