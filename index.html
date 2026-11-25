@@ -164,6 +164,7 @@
     .pdf-teach .pdf-page { cursor: crosshair; }
     .pdf-teach .pdf-hit.hover { background: rgba(245, 185, 66, 0.35); outline: 1px solid #f5b942; }
     .pdf-hit.mapped { outline: 1px solid #3ecfbe; background: rgba(62, 207, 190, 0.2); }
+    .pdf-hit.ignored { outline: 1px solid #f07178; background: rgba(240, 113, 120, 0.28); }
     .pdf-hit.pick { cursor: pointer; }
     .panel-head { user-select: none; }
     .panel-head.grab { cursor: grab; }
@@ -316,7 +317,14 @@
           One row per unique product
         </label>
         <span class="opacity-80">{{ teachHintText }}</span>
-        <span v-if="teachLinePreview" class="w-full text-[12px] font-mono text-ink-900/90">Preview {{ teachLinePreview }}</span>
+        <span v-if="teachPreviewRows.length" class="w-full flex flex-wrap items-center gap-1.5 text-[12px] font-mono text-ink-900/90">
+          <span class="opacity-80">Preview</span>
+          <span v-for="bit in teachPreviewRows" :key="bit.id" class="inline-flex items-center gap-0.5 rounded-md bg-ink-900/15 pl-1.5 pr-0.5 py-0.5">
+            {{ bit.label }}
+            <button type="button" class="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded text-ink-900/80 hover:bg-red-500 hover:text-white" title="Do not collect this PDF space" @click.stop="ignoreTeachPreview(bit)">×</button>
+          </span>
+          <span v-if="(recipeDraft.ignoreRegions || []).length" class="opacity-70">Ignored {{ (recipeDraft.ignoreRegions || []).map((r) => r.sample).filter(Boolean).join(', ') }}</span>
+        </span>
         <button v-if="!panelMode && !undocked.docs" class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="popOutPanel('docs')">Move to other monitor</button>
         <button class="ml-auto rounded-md bg-ink-900 text-gold px-2 py-1 text-[12px] font-semibold" @click="saveRecipe">Save recipe</button>
         <button class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="stopRecipeTeach">Done</button>
@@ -454,6 +462,7 @@
                     <div class="pdf-hits">
                       <div v-if="pdfHover && pdfHover.num===page.num" class="pdf-hit hover pick" :style="pdfItemStyle(pdfHover)"></div>
                       <div v-for="m in mappedHitsForPage(page)" :key="m.id" class="pdf-hit mapped" :style="pdfItemStyle(m)"></div>
+                      <div v-for="r in ignoreHitsForPage(page)" :key="r.id" class="pdf-hit ignored" :style="pdfItemStyle(r)" title="Ignored — recipe will not collect this space"></div>
                     </div>
                   </div>
                 </div>
@@ -1180,6 +1189,14 @@
                   <button v-if="mode==='architect'" type="button" class="text-[11px] text-red-300" @click="recipeDraft.lineSkip.rules.splice(ri,1)">Remove</button>
                 </div>
                 <button v-if="mode==='architect'" type="button" class="text-[12px] text-teal" @click="addLineSkipRule">+ Skip rule</button>
+              </div>
+              <div v-if="(recipeDraft.ignoreRegions || []).length" class="space-y-1 pt-2 border-t border-line">
+                <div class="text-[11px] text-mute">Ignored PDF spaces (X on the teaching preview). Fill will not collect from these areas.</div>
+                <div v-for="r in recipeDraft.ignoreRegions" :key="r.id" class="flex items-center gap-2 text-[12px]">
+                  <span class="font-mono">{{ r.sample || 'region' }}</span>
+                  <span class="text-mute">p{{ r.page || 1 }}</span>
+                  <button v-if="mode==='architect'" type="button" class="text-[11px] text-teal" @click="restoreIgnoreRegion(r)">Use again</button>
+                </div>
               </div>
               <label class="flex items-center gap-2 text-sm">
                 <input type="checkbox" class="accent-teal" v-model="recipeDraft.lineUnique.enabled" :disabled="mode!=='architect'" />
@@ -3761,11 +3778,76 @@
       return x * y;
     }
 
-    function readClickMap(pages, map) {
+    function normalizeIgnoreRegions(recipe) {
+      if (!recipe) return [];
+      if (!Array.isArray(recipe.ignoreRegions)) recipe.ignoreRegions = [];
+      return recipe.ignoreRegions;
+    }
+
+    function padIgnoreBox(b, extra) {
+      const p = extra == null ? 0.01 : extra;
+      if (!b) return b;
+      return {
+        nx: Math.max(0, (b.nx || 0) - p),
+        ny: Math.max(0, (b.ny || 0) - p * 0.7),
+        nw: Math.min(1, (b.nw || 0) + p * 2),
+        nh: Math.min(1, (b.nh || 0) + p * 1.4)
+      };
+    }
+
+    function pdfRegionIgnored(recipe, it, pageNum) {
+      if (!it || !recipe) return false;
+      return (recipe.ignoreRegions || []).some((b) => {
+        if (b.page != null && pageNum != null && Number(b.page) !== Number(pageNum)) return false;
+        return pdfRectOverlap(padIgnoreBox(b), it) > 0;
+      });
+    }
+
+    function pageItemsForRecipe(page, recipe) {
+      const items = (page && page.items) || [];
+      if (!recipe || !(recipe.ignoreRegions || []).length) return items;
+      const num = page && page.num;
+      return items.filter((it) => !pdfRegionIgnored(recipe, it, num));
+    }
+
+    function ignoreBoxForPdfItem(items, it, pageNum) {
+      if (!it) return null;
+      const y = pdfLineY(it);
+      const band = itemsOnPdfLine(items || [it], y, 0.012);
+      const extras = band.map((t) => String(t.str || '')).join(' ');
+      const productLine = band.some((t) => skuLikeSample(t.str) || /^\d{5,}$/.test(String(t.str || '').replace(/[\s.]/g, '')));
+      const wholeLine = !productLine || /ordered\s*quantity|total\s*weight|delivery|landskrona|address|post(al)?\s*code/i.test(extras);
+      const pool = wholeLine && band.length ? band : [it];
+      let nx = Math.min.apply(null, pool.map((p) => p.nx));
+      let ny = Math.min.apply(null, pool.map((p) => p.ny));
+      const x2 = Math.max.apply(null, pool.map((p) => p.nx + p.nw));
+      const y2 = Math.max.apply(null, pool.map((p) => p.ny + p.nh));
+      nx = Math.max(0, nx - 0.008);
+      ny = Math.max(0, ny - 0.004);
+      return {
+        id: uid('ign'),
+        page: pageNum || 1,
+        nx,
+        ny,
+        nw: Math.min(1, x2 + 0.008) - nx,
+        nh: Math.min(1, y2 + 0.004) - ny,
+        sample: String(it.str || '').replace(/\s+/g, ' ').trim()
+      };
+    }
+
+    function stripLineHits(lines) {
+      return (lines || []).map((row) => {
+        const o = {};
+        Object.keys(row || {}).forEach((k) => { if (k !== '__hit') o[k] = row[k]; });
+        return o;
+      });
+    }
+
+    function readClickMap(pages, map, recipe) {
       const sample = String(map.sample || '').trim();
       const page = pages[(map.page || 1) - 1];
       if (!page) return sample;
-      const items = page.items || [];
+      const items = pageItemsForRecipe(page, recipe);
       const box = { nx: map.nx, ny: map.ny, nw: Math.max(map.nw || 0, 0.004), nh: Math.max(map.nh || 0, 0.006) };
       const cx = box.nx + box.nw / 2;
       const cy = box.ny + box.nh / 2;
@@ -3809,7 +3891,7 @@
       const header = {};
       maps.filter((m) => m.role !== 'line').forEach((m) => {
         if (skuLine && isQtyLikeMap(m)) return;
-        header[m.columnId] = recipeMapValue(m, readClickMap(pages, m));
+        header[m.columnId] = recipeMapValue(m, readClickMap(pages, m, recipe));
       });
       let lineMaps = maps.filter((m) => m.role === 'line');
       if (skuLine) {
@@ -3822,7 +3904,7 @@
         const skuMap = lineMaps.find((m) => skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample)));
         const m0 = skuMap || lineMaps[0];
         const page = pages[(m0.page || 1) - 1];
-        const items = (page && page.items) || [];
+        const items = pageItemsForRecipe(page, recipe);
         const cx0 = m0.nx + m0.nw / 2;
         const sample = String(m0.sample || '').trim();
         const skuAnchor = skuLikeSample(sample) || (m0.choices || []).some((c) => skuLikeSample(c.sample));
@@ -3831,12 +3913,13 @@
         hits = hits.filter((it) => !skuBlockedByHeader(header, it.str));
         if (skuAnchor && hits.length > 1) hits = densestSkuHits(hits);
         const clusters = [];
-        hits.map((it) => it.ny + it.nh / 2).sort((a, b) => a - b).forEach((y) => {
+        hits.slice().sort((a, b) => (a.ny + a.nh / 2) - (b.ny + b.nh / 2)).forEach((it) => {
+          const y = it.ny + it.nh / 2;
           const last = clusters[clusters.length - 1];
           if (last && Math.abs(last.y - y) < 0.01) {
             last.y = (last.y * last.n + y) / (last.n + 1);
             last.n += 1;
-          } else clusters.push({ y, n: 1 });
+          } else clusters.push({ y, n: 1, hit: it });
         });
         clusters.forEach((c) => {
           const row = {};
@@ -3863,10 +3946,13 @@
           const sku = skuValueFromLineRow(row);
           if (sku && /15$/.test(String(sku).replace(/\s/g, ''))) return;
           if (skuBlockedByHeader(header, sku)) return;
+          const hit = c.hit || {};
+          row.__hit = { page: (page && page.num) || 1, nx: hit.nx, ny: hit.ny, nw: hit.nw, nh: hit.nh, str: hit.str };
           lines.push(row);
         });
       }
-      return { header, lines: uniqueRecipeLines(recipe, lines) };
+      const kept = uniqueRecipeLines(recipe, lines);
+      return { header, lines: stripLineHits(kept), hits: kept.map((row) => row.__hit || null) };
     }
 
     function runRecipeExtract(text, recipe) {
@@ -5043,20 +5129,34 @@
           }
           return 'Pick Line Items · Item No, then click each unique product number on the PDF.';
         },
-        teachLinePreview() {
-          if (!this.recipeTeach.active) return '';
+        teachPreviewRows() {
+          if (!this.recipeTeach.active) return [];
           const pages = (this.pdfView && this.pdfView.pages) || [];
           const maps = (this.recipeDraft && this.recipeDraft.maps) || [];
-          if (!pages.length || !maps.some(isQtyLikeMap) || !maps.some((m) => m.role === 'line')) return '';
+          if (!pages.length || !maps.some((m) => m.role === 'line')) return [];
           const got = extractFromMaps(pages, this.recipeDraft);
           const qmaps = maps.filter(isQtyLikeMap);
-          const bits = (got.lines || []).map((row) => {
+          return (got.lines || []).map((row, i) => {
             const sku = skuValueFromLineRow(row);
             const q = qmaps.map((m) => row[m.columnId]).find((v) => v != null && v !== '');
-            if (q == null || q === '') return '';
-            return (sku ? String(sku) : 'line') + ' → ' + q + ' boxes';
+            const hit = (got.hits && got.hits[i]) || null;
+            const label = q == null || q === ''
+              ? String(sku || row[maps[0] && maps[0].columnId] || '')
+              : (sku ? String(sku) : 'line') + ' → ' + q + ' boxes';
+            if (!label) return null;
+            return {
+              id: 'pv' + i + ':' + label,
+              label,
+              sku,
+              qty: q,
+              page: hit && hit.page,
+              nx: hit && hit.nx,
+              ny: hit && hit.ny,
+              nw: hit && hit.nw,
+              nh: hit && hit.nh,
+              str: hit && hit.str
+            };
           }).filter(Boolean);
-          return bits.join(' · ');
         }
       },
       watch: {
@@ -8177,6 +8277,7 @@
             lineRegex: '',
             lineFields: [],
             maps: [],
+            ignoreRegions: [],
             lineSkip: emptyLineSkip(),
             lineUnique: emptyLineUnique()
           };
@@ -8190,6 +8291,7 @@
         editRecipe(r) {
           this.recipeDraft = clone(r);
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
+          normalizeIgnoreRegions(this.recipeDraft);
           normalizeLineSkip(this.recipeDraft);
           normalizeLineUnique(this.recipeDraft);
           (this.recipeDraft.headerFields || []).forEach((f) => {
@@ -8233,6 +8335,7 @@
             this.currentGroupId = ht.groupId;
           }
           ensureRecipeLineTable(this.store, this.recipeDraft);
+          normalizeIgnoreRegions(this.recipeDraft);
           this.recipeTeach = { active: true, colId: '', pick: '', line: !!ensureRecipeLineTable(this.store, this.recipeDraft) };
           this.selectedRecipeId = this.recipeDraft.id;
           if (this.splitWidth < 46) this.splitWidth = 48;
@@ -8289,20 +8392,53 @@
             height: Math.max(it.nh * 100, 0.8) + '%'
           };
         },
+        ignoreHitsForPage(page) {
+          return ((this.recipeDraft && this.recipeDraft.ignoreRegions) || [])
+            .filter((r) => r && (r.page == null || r.page === page.num))
+            .map((r) => ({ id: r.id || ('ign-' + r.nx + '-' + r.ny), nx: r.nx, ny: r.ny, nw: r.nw, nh: r.nh }));
+        },
+        ignoreTeachPreview(bit) {
+          if (!bit || this.mode !== 'architect') return;
+          normalizeIgnoreRegions(this.recipeDraft);
+          const page = ((this.pdfView && this.pdfView.pages) || []).find((p) => p.num === (bit.page || 1))
+            || ((this.pdfView && this.pdfView.pages) || [])[0];
+          const items = (page && page.items) || [];
+          let it = null;
+          if (bit.nx != null && bit.ny != null) {
+            it = { str: bit.str || bit.label, nx: bit.nx, ny: bit.ny, nw: bit.nw || 0.02, nh: bit.nh || 0.015 };
+          } else {
+            const needle = String(bit.str || bit.sku || '').trim();
+            it = items.find((x) => String(x.str || '').replace(/\s+/g, '') === needle.replace(/\s+/g, ''));
+          }
+          if (!it) return this.toast('Could not find that value on the PDF.', 'warn');
+          const box = ignoreBoxForPdfItem(items, it, (page && page.num) || bit.page || 1);
+          const already = (this.recipeDraft.ignoreRegions || []).some((r) => pdfRectOverlap(r, box) > (box.nw * box.nh) * 0.4);
+          if (already) return this.toast('That space is already ignored.');
+          this.recipeDraft.ignoreRegions.push(box);
+          this.saveRecipe({ quiet: true });
+          this.toast('Won’t collect “' + (box.sample || bit.label) + '” from that PDF space.');
+        },
+        restoreIgnoreRegion(r) {
+          if (!r) return;
+          this.recipeDraft.ignoreRegions = (this.recipeDraft.ignoreRegions || []).filter((x) => x !== r && x.id !== r.id);
+          this.saveRecipe({ quiet: true });
+          this.toast('That PDF space can be collected again.');
+        },
         mappedHitsForPage(page) {
           const maps = (this.recipeDraft && this.recipeDraft.maps) || [];
           const out = [];
           maps.forEach((m) => {
             if (isQtyLikeMap(m) && page && page.items) {
-              const hx = colliHeaderX(page.items);
+              const items = pageItemsForRecipe(page, this.recipeDraft);
+              const hx = colliHeaderX(items);
               const cx = hx != null && Math.abs((m.nx + (m.nw || 0) / 2) - hx) > 0.12 ? hx : (m.nx + (m.nw || 0) / 2);
               const seen = {};
-              page.items.forEach((it) => {
+              items.forEach((it) => {
                 if (!skuLikeSample(it.str)) return;
                 const y = pdfLineY(it);
-                const extras = itemsOnPdfLine(page.items, y).map((t) => t.str);
+                const extras = itemsOnPdfLine(items, y).map((t) => t.str);
                 if (extras.some((s) => /europool|kasse|emballage/i.test(String(s || '')))) return;
-                const q = qtyItemAtColumn(page.items, cx, y);
+                const q = qtyItemAtColumn(items, cx, y);
                 if (!q) return;
                 const key = String(q.ny.toFixed(3)) + ':' + String(q.str);
                 if (seen[key]) return;
@@ -8313,9 +8449,10 @@
             }
             const openCol = m.role === 'line' && (skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c && c.sample)));
             if (openCol && page && page.items) {
+              const items = pageItemsForRecipe(page, this.recipeDraft);
               const cx = m.nx + (m.nw || 0) / 2;
               const seen = {};
-              page.items.forEach((it) => {
+              items.forEach((it) => {
                 if (Math.abs((it.nx + it.nw / 2) - cx) > 0.08) return;
                 if (!skuLikeSample(it.str)) return;
                 if (recipeLineSkipped(this.recipeDraft, { [m.columnId]: it.str }, [it.str])) return;
@@ -8331,7 +8468,7 @@
               if ((c.page || m.page) === page.num) out.push({ id: m.id + '-c' + i, nx: c.nx, ny: c.ny, nw: c.nw || m.nw, nh: c.nh || m.nh });
             });
           });
-          return out;
+          return out.filter((h) => !pdfRegionIgnored(this.recipeDraft, h, page.num));
         },
         onPdfPageMove(ev, page) {
           if (!this.recipeTeach.active) return;
@@ -8613,7 +8750,7 @@
         addRecipeLineField() {
           this.recipeDraft.lineFields.push({ group: 1, columnId: '', transform: 'text', fill: 'pdf', lookup: emptyRecipeLookup() });
         },
-        saveRecipe() {
+        saveRecipe(opts) {
           if (!this.recipeDraft.name) return this.toast('Give the recipe a name, for example Rema.', 'warn');
           const i = this.store.recipes.findIndex((r) => r.id === this.recipeDraft.id);
           const copy = clone(this.recipeDraft);
@@ -8626,7 +8763,7 @@
           else this.store.recipes.push(copy);
           this.selectedRecipeId = copy.id;
           this.audit('recipe.save', copy.name, '');
-          this.toast('Saved recipe ' + copy.name + '.');
+          if (!(opts && opts.quiet)) this.toast('Saved recipe ' + copy.name + '.');
         },
         async deleteRecipe() {
           const name = this.recipeDraft.name;
@@ -9376,6 +9513,29 @@
             ]
           });
           if (headerSku.lines.length !== 3 || headerSku.lines.some((r) => String(r.sku) === '421268')) console.warn('order number 421268 must not become an extra product line', headerSku.lines);
+          const dagabItems = [
+            { str: '51', nx: 0.62, ny: 0.10, nw: 0.03, nh: 0.015 },
+            { str: 'LANDSKRONA', nx: 0.66, ny: 0.10, nw: 0.12, nh: 0.015 },
+            { str: '101894617', nx: 0.10, ny: 0.50, nw: 0.08, nh: 0.015 },
+            { str: '16', nx: 0.62, ny: 0.50, nw: 0.03, nh: 0.015 },
+            { str: '101285387', nx: 0.10, ny: 0.56, nw: 0.08, nh: 0.015 },
+            { str: '144', nx: 0.62, ny: 0.56, nw: 0.03, nh: 0.015 },
+            { str: 'OrderedQuantity', nx: 0.40, ny: 0.78, nw: 0.14, nh: 0.015 },
+            { str: '168', nx: 0.62, ny: 0.78, nw: 0.03, nh: 0.015 }
+          ];
+          const dagabRecipe = {
+            maps: [{ role: 'line', columnId: 'qty', page: 1, nx: 0.62, ny: 0.50, nw: 0.03, nh: 0.015, sample: '16', transform: 'number' }]
+          };
+          const dagabAll = extractFromMaps([{ num: 1, items: dagabItems }], dagabRecipe);
+          const dagabVals = dagabAll.lines.map((r) => Number(r.qty)).join(',');
+          if (dagabVals !== '51,16,144,168') console.warn('box column preview should show address 51, product 16/144, and total 168', dagabAll.lines);
+          const ign51 = ignoreBoxForPdfItem(dagabItems, dagabItems[0], 1);
+          const ign168 = ignoreBoxForPdfItem(dagabItems, dagabItems[dagabItems.length - 1], 1);
+          if (!pdfRegionIgnored({ ignoreRegions: [ign51] }, dagabItems[1], 1)) console.warn('ignoring address 51 should also skip LANDSKRONA on that line');
+          const dagabCut = extractFromMaps([{ num: 1, items: dagabItems }], Object.assign({}, dagabRecipe, { ignoreRegions: [ign51, ign168] }));
+          if (dagabCut.lines.map((r) => Number(r.qty)).join(',') !== '16,144') console.warn('X on preview must drop address 51 and total 168, keep product boxes', dagabCut.lines);
+          const ign16 = ignoreBoxForPdfItem(dagabItems, dagabItems[3], 1);
+          if (pdfRegionIgnored({ ignoreRegions: [ign16] }, dagabItems[2], 1)) console.warn('X on a product qty must not ignore the SKU on that line');
           const sibTable = {
             columns: [
               { id: 'ref', name: 'Customer Ref', type: 'text' },
