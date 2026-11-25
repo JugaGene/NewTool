@@ -1441,6 +1441,42 @@
       teal: 'bg-teal-500/20 text-teal-200 border-teal-500/40'
     };
 
+    function decodeHtmlEntities(s) {
+      return String(s == null ? '' : s)
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;|&apos;/g, "'")
+        .replace(/&amp;/g, '&');
+    }
+    function unwrapSheetMarkup(val) {
+      if (typeof val !== 'string') return val;
+      let s = val.trim();
+      if (!s) return val;
+      if (s.indexOf('cell-log') < 0 && !/<(div|span|td)\b/i.test(s)) return val;
+      for (let n = 0; n < 5 && /&lt;|&gt;|&amp;/.test(s); n++) s = decodeHtmlEntities(s);
+      const lastClass = (cls) => {
+        const re = new RegExp('class=["\']' + cls + '["\'][^>]*>([\\s\\S]*?)<', 'gi');
+        let m, hit = '';
+        while ((m = re.exec(s))) hit = m[1];
+        return decodeHtmlEntities(String(hit).replace(/<[^>]+>/g, '')).trim();
+      };
+      const token = (t) => {
+        t = decodeHtmlEntities(String(t || '').trim());
+        if (!t || /^<?blank>?$/i.test(t)) return '';
+        return t;
+      };
+      if (/cell-log/i.test(s) || /class=["'](before|after)["']/.test(s)) {
+        const after = token(lastClass('after'));
+        if (after) return after;
+        const before = token(lastClass('before'));
+        if (before) return before;
+        return '';
+      }
+      const stripped = decodeHtmlEntities(s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+      return stripped || '';
+    }
     function parseClipboardGrid(text) {
       const raw = String(text || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (!raw) return [];
@@ -1685,6 +1721,9 @@
             if (!r.data) return;
             const v = r.data[c.id];
             if (isTextColumn(c) && typeof v === 'number' && Number.isFinite(v)) r.data[c.id] = String(v);
+            if (typeof v === 'string' && (v.indexOf('cell-log') >= 0 || /class=["'](before|after)["']/.test(v))) {
+              r.data[c.id] = unwrapSheetMarkup(v);
+            }
           });
         });
       });
@@ -2557,6 +2596,7 @@
       if ((col.type === 'date' || col.type === 'datetime') && v) return formatDateDMY(v);
       if (col.type === 'attachment') return isAttachMeta(v) ? v.name : '';
       if (isAttachMeta(v)) return v.name;
+      if (typeof v === 'string' && (v.indexOf('cell-log') >= 0 || /<(div|span)\b/i.test(v))) return unwrapSheetMarkup(v);
       return v == null ? '' : String(v);
     }
 
@@ -5070,7 +5110,7 @@
             allowManualInsertRow: false,
             allowDeleteRow: false,
             parseFormulas: false,
-            copyCompatibility: true,
+            copyCompatibility: false,
             wordWrap: false,
             updateTable(instance, cell, col, row, val, label, cellName) {
               vm.paintAttachTd(cell, Number(col), Number(row));
@@ -5155,13 +5195,13 @@
                   if (col.type === 'attachment') return;
                   if (vm.isComputedCell(rec, col) && !formulaUsesTypedValue(col)) return;
                   const shown = String(vm.displayValue(rec, col) ?? '');
-                  const next = col.type === 'checkbox' ? val : String(val == null ? '' : val);
                   if (col.type === 'checkbox') {
                     if (!!rawStored(rec, col) !== !!val) vm.setCell(rec, col, !!val, true);
                     return;
                   }
-                  if (shown === next) return;
-                  const parsed = vm.coercePasteValue(col, val);
+                  const next = unwrapSheetMarkup(String(val == null ? '' : val));
+                  if (shown === String(next ?? '')) return;
+                  const parsed = vm.coercePasteValue(col, next);
                   if (!parsed.skip) vm.setCell(rec, col, parsed.value, true);
                 });
               });
@@ -7081,6 +7121,7 @@
           this.pasteGrid(text);
         },
         coercePasteValue(col, raw) {
+          if (typeof raw === 'string') raw = unwrapSheetMarkup(raw);
           const s = String(raw == null ? '' : raw).trim();
           if (col.type === 'autonumber' || col.type === 'attachment' || col.type === 'rollup') return { skip: true };
           if (s === '') return { value: col.type === 'checkbox' ? false : null };
@@ -8877,6 +8918,11 @@
           if (shiftA1InText('XLOOKUP(C1, "Products", "Item No", "Name")', 1, 0) !== 'XLOOKUP(C2, "Products", "Item No", "Name")') console.warn('shift formula A1 failed');
           const clip = parseClipboardGrid('10\tHeat-treated\n4\tSame-day');
           if (clip.length !== 2 || clip[0][0] !== '10' || clip[1][1] !== 'Same-day') console.warn('clipboard grid parse failed', clip);
+          const logHtml = '<div class="cell-log"><div class="before">blank</div><div class="cell-log">&gt;</div><div class="after">Cater Grant A/S</div></div>';
+          if (unwrapSheetMarkup(logHtml) !== 'Cater Grant A/S') console.warn('unwrap cell-log failed', unwrapSheetMarkup(logHtml));
+          const nested = '&lt;div class="cell-log"&gt;&lt;div class="before"&gt;blank&lt;/div&gt;&lt;div class="after"&gt;Coop Brondby&lt;/div&gt;&lt;/div&gt;';
+          if (unwrapSheetMarkup(nested) !== 'Coop Brondby') console.warn('unwrap escaped cell-log failed', unwrapSheetMarkup(nested));
+          if (unwrapSheetMarkup('plain name') !== 'plain name') console.warn('unwrap must leave plain text');
           const typeWs = sampleWorkspace('TypeRule');
           const cust2 = typeWs.tables.find((x) => x.name === 'Customers');
           const city2 = cust2.columns.find((c) => c.name === 'City');
@@ -9210,11 +9256,10 @@
           if (this.keysBlockedByUi()) return;
           const text = e.clipboardData && e.clipboardData.getData && e.clipboardData.getData('text/plain');
           if (this.view === 'grid' && this.currentTable && text && String(text).trim() !== '') {
-            if (!this.currentTable.columns.length || !this._jexcel) {
-              e.preventDefault();
-              this._clipText = text;
-              this.pasteGrid(text);
-            }
+            e.preventDefault();
+            if (e.stopPropagation) e.stopPropagation();
+            this._clipText = text;
+            this.pasteGrid(text);
             return;
           }
           if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
@@ -9266,16 +9311,16 @@
         this.ready = true;
         this.initUndock();
         this.$nextTick(() => this.bindSheet());
-        window.addEventListener('paste', this.onPaste);
-        window.addEventListener('copy', this.onCopy);
+        window.addEventListener('paste', this.onPaste, true);
+        window.addEventListener('copy', this.onCopy, true);
         window.addEventListener('click', this.onDocClick);
         window.addEventListener('keydown', this.onWinKey);
         window.addEventListener('storage', this.onWorkspaceStorage);
         window.addEventListener('beforeunload', this.onPanelUnload);
       },
       unmounted() {
-        window.removeEventListener('paste', this.onPaste);
-        window.removeEventListener('copy', this.onCopy);
+        window.removeEventListener('paste', this.onPaste, true);
+        window.removeEventListener('copy', this.onCopy, true);
         window.removeEventListener('click', this.onDocClick);
         window.removeEventListener('resize', this.onWinResize);
         window.removeEventListener('mouseup', this.endSelectDrag);
