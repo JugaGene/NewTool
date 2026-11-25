@@ -99,6 +99,8 @@
     .attach-chip .act.edit:hover { color: #f5b942; }
     .attach-chip .act:disabled { opacity: .35; }
     .attach-chip.drop { outline: 1px dashed #3ecfbe; background: rgba(62,207,190,.08); }
+    .sheet-edit-pop { overflow: visible; }
+    .search-drop { max-height: 14rem; overflow: auto; border-radius: 0.5rem; border: 1px solid #2a3b5c; background: #10192c; box-shadow: 0 24px 80px rgba(0,0,0,.45); }
     .search-hit { color: #f5b942; font-weight: 600; }
     .search-opt.active { background: #1c2b48; }
     .col-resizer:hover, .col-resizer.active { background: #3ecfbe; }
@@ -1340,7 +1342,7 @@
         </template>
       </div>
 
-      <div v-if="sheetEdit.open && sheetEdit.rec && sheetEdit.col" class="fixed z-[85] rounded-lg border border-line bg-ink-850 shadow-panel p-2" :style="sheetEdit.style" @mousedown.stop @click.stop>
+      <div v-if="sheetEdit.open && sheetEdit.rec && sheetEdit.col" class="sheet-edit-pop fixed z-[95] rounded-lg border border-line bg-ink-850 shadow-panel p-2" :style="sheetEdit.style" @mousedown.stop @click.stop>
         <attach-cell v-if="effectiveCol(sheetEdit.rec, sheetEdit.col).type==='attachment'"
           :column="effectiveCol(sheetEdit.rec, sheetEdit.col)" :record="sheetEdit.rec" variant="form" :locked="!!sheetEdit.rec.locked"
           @commit="commitSheetEdit" @open="openAttachment"></attach-cell>
@@ -1701,6 +1703,38 @@
     function isTextColumn(col) {
       const t = col && col.type;
       return t === 'text' || t === 'longtext' || t === 'search' || t === 'email' || t === 'phone' || t === 'url';
+    }
+    function linkedRowSearchText(store, table, rec, col) {
+      if (!table || !rec) return '';
+      const scope = (col && col.link && col.link.searchScope) || (col && col.type === 'search' ? 'row' : 'column');
+      if (scope === 'column') {
+        const sc = findColumn(table, col.link && col.link.searchColumnId) || findColumn(table, col.link && col.link.displayColumnId) || table.columns[0];
+        return String(formatDisplay(store, table, rec, sc) || '').toLowerCase();
+      }
+      return table.columns.map((c) => String(formatDisplay(store, table, rec, c) || '').toLowerCase()).join('\n');
+    }
+    function searchLinkHits(store, col, q, limit) {
+      if (!isLinkCol(col)) return [];
+      const lt = findTable(store, col.link && col.link.tableId);
+      if (!lt) return [];
+      const dc = findColumn(lt, col.link && col.link.displayColumnId) || lt.columns[0];
+      const needle = String(q || '').trim().toLowerCase();
+      const rows = lt.records.map((r) => {
+        const label = formatDisplay(store, lt, r, dc);
+        const hay = linkedRowSearchText(store, lt, r, col);
+        const labelL = String(label || '').toLowerCase();
+        let rank = 80;
+        if (needle) {
+          if (labelL.startsWith(needle)) rank = 0;
+          else if (hay.split('\n').some((p) => p.startsWith(needle))) rank = 1;
+          else if (labelL.includes(needle)) rank = 2;
+          else if (hay.includes(needle)) rank = 3;
+          else rank = 99;
+        }
+        return { id: r.id, label, hay, rank };
+      }).filter((row) => !needle || row.rank < 99);
+      rows.sort((a, b) => a.rank - b.rank || String(a.label).localeCompare(String(b.label)));
+      return rows.slice(0, limit == null ? 80 : limit);
     }
     function colByName(table, name) {
       const n = String(name || '').trim().toLowerCase();
@@ -3595,25 +3629,8 @@
           return this.rankedChoices;
         },
         rankedChoices() {
-          if (!this.linkedTable) return [];
-          const dc = findColumn(this.linkedTable, this.column.link && this.column.link.displayColumnId) || this.linkedTable.columns[0];
           const q = String(this.q || '').trim().toLowerCase();
-          const rows = this.linkedTable.records.map((r) => {
-            const label = formatDisplay(this.store, this.linkedTable, r, dc);
-            const hay = this.rowSearchText(r);
-            const labelL = String(label || '').toLowerCase();
-            let rank = 80;
-            if (q) {
-              if (labelL.startsWith(q)) rank = 0;
-              else if (hay.split('\n').some((p) => p.startsWith(q))) rank = 1;
-              else if (labelL.includes(q)) rank = 2;
-              else if (hay.includes(q)) rank = 3;
-              else rank = 99;
-            }
-            return { id: r.id, label, hay, sub: this.rowSearchHint(r, q), rank };
-          }).filter((row) => !q || row.rank < 99);
-          rows.sort((a, b) => a.rank - b.rank || String(a.label).localeCompare(String(b.label)));
-          return rows.slice(0, 80);
+          return searchLinkHits(this.store, this.column, this.q, 80).map((row) => Object.assign({}, row, { sub: this.rowSearchHintById(row.id, q) }));
         },
         keyChoices() {
           if (!this.linkedTable) return [];
@@ -3654,20 +3671,24 @@
         if (this.variant === 'grid') {
           const seed = this.$root && this.$root.editSeed;
           if (seed != null && seed !== '') {
-            this.buffer = seed;
+            if (this.isSearchLink || this.isKeySelfLink) this.q = String(seed);
+            else this.buffer = seed;
             this.dirty = true;
+            this.open = true;
             this.$root.editSeed = '';
           }
           this.$nextTick(() => {
             const el = this.$refs.input;
             if (el && el.focus) {
               el.focus();
+              const typed = this.isSearchLink || this.isKeySelfLink ? this.q : this.buffer;
               if (seed) {
-                const n = String(this.buffer || '').length;
+                const n = String(typed || '').length;
                 if (el.setSelectionRange) el.setSelectionRange(n, n);
-              } else if (el.select && !this.isSearchLink) el.select();
+              } else if (el.select && !this.isSearchLink && !this.isKeySelfLink) el.select();
             }
             if (isLinkCol(this.column)) this.open = true;
+            this.placeDrop();
           });
         }
       },
@@ -3723,12 +3744,17 @@
             const el = this.$refs.input;
             if (!el || !this.open) { this.dropPos = null; return; }
             const r = el.getBoundingClientRect();
+            const width = Math.max(280, r.width + 56);
+            const left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - width - 8));
+            const maxH = 224;
+            const below = r.bottom + 4;
+            const top = (below + maxH > window.innerHeight - 8) ? Math.max(8, r.top - maxH - 4) : below;
             this.dropPos = {
               position: 'fixed',
-              top: (r.bottom + 2) + 'px',
-              left: r.left + 'px',
-              width: Math.max(240, r.width + 56) + 'px',
-              zIndex: 90
+              top: top + 'px',
+              left: left + 'px',
+              width: width + 'px',
+              zIndex: 120
             };
           });
         },
@@ -3750,14 +3776,13 @@
           this.activeIdx = 0;
         },
         rowSearchText(r) {
+          return linkedRowSearchText(this.store, this.linkedTable, r, this.column);
+        },
+        rowSearchHintById(id, q) {
           const lt = this.linkedTable;
-          if (!lt) return '';
-          const scope = (this.column.link && this.column.link.searchScope) || (this.column.type === 'search' ? 'row' : 'column');
-          if (scope === 'column') {
-            const sc = findColumn(lt, this.column.link.searchColumnId) || findColumn(lt, this.column.link.displayColumnId) || lt.columns[0];
-            return String(formatDisplay(this.store, lt, r, sc) || '').toLowerCase();
-          }
-          return lt.columns.map((c) => String(formatDisplay(this.store, lt, r, c) || '').toLowerCase()).join('\n');
+          if (!lt || !q) return '';
+          const r = lt.records.find((x) => x.id === id);
+          return r ? this.rowSearchHint(r, q) : '';
         },
         rowSearchHint(r, q) {
           const lt = this.linkedTable;
@@ -3790,23 +3815,29 @@
           this.pickLink(hits[i].id);
         },
         searchKey(e) {
+          e.stopPropagation();
           if (e.key === 'ArrowDown') {
-            e.preventDefault(); e.stopPropagation();
+            e.preventDefault();
             this.open = true;
             this.activeIdx = Math.min(this.activeIdx + 1, Math.max(0, this.rankedChoices.length - 1));
+            this.placeDrop();
             return;
           }
           if (e.key === 'ArrowUp') {
-            e.preventDefault(); e.stopPropagation();
+            e.preventDefault();
             this.activeIdx = Math.max(0, this.activeIdx - 1);
             return;
           }
           if (e.key === 'Enter' || e.key === 'Tab') {
-            e.preventDefault(); e.stopPropagation();
+            e.preventDefault();
             if (this.rankedChoices.length) this.pickHighlighted();
             return;
           }
-          if (e.key === 'Escape') { e.stopPropagation(); this.open = false; this.$emit('cancel'); }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            this.open = false;
+            this.$emit('cancel');
+          }
         },
         pickLink(id) {
           this.emitCommit(id);
@@ -3840,6 +3871,8 @@
         },
         onLinkBlur() {
           setTimeout(() => {
+            const active = document.activeElement;
+            if (active && (active === this.$refs.input || (active.closest && active.closest('.search-drop')))) return;
             const q = String(this.q || '').trim();
             if (q && this.rankedChoices.length) {
               const exact = this.rankedChoices.find((c) => String(c.label).toLowerCase() === q.toLowerCase());
@@ -3849,7 +3882,6 @@
               if (this.rankedChoices.length === 1) { this.pickLink(this.rankedChoices[0].id); return; }
             }
             this.open = false;
-            if (this.variant === 'grid') this.$emit('cancel');
           }, 160);
         },
         key(e) {
@@ -3870,33 +3902,37 @@
           <option v-for="o in (column.options||[])" :key="o.value" :value="o.value">{{ o.value }}</option>
         </select>
         <div v-else-if="column.type==='link' && isKeySelfLink" class="relative">
-          <input ref="input" v-model="q" class="w-full bg-ink-900 px-2 py-1.5 outline-none" :class="variant==='form' && 'border border-line rounded-lg px-3 py-2'" placeholder="Type a key to look up…" @focus="open=true" @input="open=true" @blur="onKeyLookupBlur" @keydown="keyLookupKey" />
-          <div v-if="open" class="absolute z-40 mt-1 left-0 right-0 max-h-48 overflow-auto rounded-lg border border-line bg-ink-850 shadow-panel" @mousedown.prevent>
-            <button type="button" class="w-full text-left px-3 py-1.5 text-sm text-mute hover:bg-ink-700" @click="clearKeyLookup">Clear</button>
-            <button v-for="c in keyChoices" :key="c.id" type="button" class="w-full text-left px-3 py-1.5 text-sm hover:bg-ink-700" @click="pickKeyChoice(c)">
-              <span class="font-mono text-gold">{{ c.keyText }}</span>
-              <span class="text-mute"> → </span>
-              <span class="text-teal">{{ c.label }}</span>
-            </button>
-            <div v-if="!keyChoices.length" class="px-3 py-2 text-xs text-mute">No matching records</div>
-          </div>
+            <input ref="input" v-model="q" class="w-full bg-ink-900 px-2 py-1.5 outline-none" :class="variant==='form' && 'border border-line rounded-lg px-3 py-2'" placeholder="Type a key to look up…" @focus="open=true; placeDrop()" @input="open=true" @blur="onKeyLookupBlur" @keydown.stop="keyLookupKey" />
+          <teleport to="body">
+            <div v-if="open" class="search-drop" :style="dropPos || { position: 'fixed', zIndex: 120 }" @mousedown.prevent @keydown.capture.stop>
+              <button type="button" class="w-full text-left px-3 py-1.5 text-sm text-mute hover:bg-ink-700" @click="clearKeyLookup">Clear</button>
+              <button v-for="c in keyChoices" :key="c.id" type="button" class="w-full text-left px-3 py-1.5 text-sm hover:bg-ink-700" @click="pickKeyChoice(c)">
+                <span class="font-mono text-gold">{{ c.keyText }}</span>
+                <span class="text-mute"> → </span>
+                <span class="text-teal">{{ c.label }}</span>
+              </button>
+              <div v-if="!keyChoices.length" class="px-3 py-2 text-xs text-mute">No matching records</div>
+            </div>
+          </teleport>
         </div>
         <div v-else-if="isSearchLink" class="relative">
           <div class="search-combo" :class="variant==='form' && 'rounded-lg border border-line overflow-hidden'">
-            <input ref="input" v-model="q" class="w-full bg-ink-900 px-2 py-1.5 outline-none text-sm" :placeholder="linkLabel() || 'Type to search…'" @focus="open=true" @input="onSearchInput" @blur="onLinkBlur" @keydown="searchKey" />
+            <input ref="input" v-model="q" class="w-full bg-ink-900 px-2 py-1.5 outline-none text-sm" :placeholder="linkLabel() || 'Type to search…'" @focus="open=true; placeDrop()" @input="onSearchInput" @blur="onLinkBlur" @keydown="searchKey" />
             <button type="button" class="sq" title="Search" @mousedown.prevent="openPicker"><icon name="search" size="14"></icon></button>
             <button type="button" class="sq" title="Show all matches" @mousedown.prevent="toggleSearch"><span class="block rotate-90"><icon name="chevron" size="14"></icon></span></button>
           </div>
-          <div v-if="open" class="max-h-56 overflow-auto rounded-lg border border-line bg-ink-850 shadow-panel" :style="dropPos || {}" @mousedown.prevent>
-            <button type="button" class="w-full text-left px-3 py-1.5 text-sm text-mute hover:bg-ink-700" @click="pickLink(null)">Clear</button>
-            <button v-for="(c, i) in rankedChoices" :key="c.id" type="button" class="search-opt w-full text-left px-3 py-1.5 text-sm hover:bg-ink-700" :class="i===activeIdx && 'active'" @mouseenter="activeIdx=i" @click="pickLink(c.id)">
-              <span>
-                <span v-for="(p, pi) in matchParts(c.label, q)" :key="pi" :class="p.on && 'search-hit'">{{ p.t }}</span>
-              </span>
-              <span v-if="c.sub" class="block text-[11px] text-mute truncate">{{ c.sub }}</span>
-            </button>
-            <div v-if="!rankedChoices.length" class="px-3 py-2 text-xs text-mute">No matches. Keep typing, or clear the search.</div>
-          </div>
+          <teleport to="body">
+            <div v-if="open" class="search-drop" :style="dropPos || { position: 'fixed', zIndex: 120 }" @mousedown.prevent @keydown.capture.stop>
+              <button type="button" class="w-full text-left px-3 py-1.5 text-sm text-mute hover:bg-ink-700" @click="pickLink(null)">Clear</button>
+              <button v-for="(c, i) in rankedChoices" :key="c.id" type="button" class="search-opt w-full text-left px-3 py-1.5 text-sm hover:bg-ink-700" :class="i===activeIdx && 'active'" @mouseenter="activeIdx=i" @click="pickLink(c.id)">
+                <span>
+                  <span v-for="(p, pi) in matchParts(c.label, q)" :key="pi" :class="p.on && 'search-hit'">{{ p.t }}</span>
+                </span>
+                <span v-if="c.sub" class="block text-[11px] text-mute truncate">{{ c.sub }}</span>
+              </button>
+              <div v-if="!rankedChoices.length" class="px-3 py-2 text-xs text-mute">No matches. Keep typing, or clear the search.</div>
+            </div>
+          </teleport>
         </div>
         <textarea v-else-if="column.type==='longtext'" ref="input" v-model="buffer" rows="3" class="w-full bg-ink-900 px-2 py-1.5 outline-none" :class="variant==='form' && 'border border-line rounded-lg px-3 py-2'" @input="liveCommit" @blur="onBlur" @keydown="key"></textarea>
         <div v-else class="relative">
@@ -4513,6 +4549,7 @@
               vm.applySelection({ recId: rows[ya].id, colId: cols[xa].id }, { recId: rows[yb].id, colId: cols[xb].id });
             },
             oneditionstart(el2, cell, x, y) {
+              if (vm.sheetEdit.open) return false;
               const rec = vm.filteredRecords[y];
               const col = vm.visibleColumns[x];
               if (!rec || !col) return;
@@ -4523,14 +4560,13 @@
               const use = vm.effectiveCol(rec, col);
               if (rec.locked || (vm.isComputedCell(rec, col) && !formulaUsesTypedValue(use))) return false;
               if (use.type === 'search' || isLinkCol(use) || use.type === 'attachment' || use.type === 'longtext') {
-                const r = cell.getBoundingClientRect();
                 if (use.type === 'attachment') vm.openSheetAttach(rec, use, cell);
-                else vm.sheetEdit = {
-                  open: true,
-                  rec,
-                  col: use,
-                  style: { left: Math.min(r.left, window.innerWidth - 320) + 'px', top: (r.bottom + 4) + 'px', width: Math.max(240, r.width) + 'px' }
-                };
+                else vm.openSheetFieldEditor(rec, use, cell, vm.consumeTypedSeed());
+                vm._sheetLock = true;
+                setTimeout(() => {
+                  vm._sheetLock = false;
+                  vm.refreshSheetValues();
+                }, 80);
                 return false;
               }
               if (vm.mode === 'architect' && cellFxOf(rec, col) && vm.canWriteCellFx(rec, col)) {
@@ -4539,6 +4575,11 @@
               }
             },
             onbeforechange(el2, cell, x, y, value) {
+              if (vm.sheetEdit.open) {
+                const recKeep = vm.filteredRecords[y];
+                const colKeep = vm.visibleColumns[x];
+                if (recKeep && colKeep) return vm.displayValue(recKeep, colKeep);
+              }
               if (vm._sheetLock) return value;
               const rec = vm.filteredRecords[y];
               const col = vm.visibleColumns[x];
@@ -4616,6 +4657,12 @@
             if (!el._fgAttachBound) {
               el._fgAttachBound = true;
               el.addEventListener('click', (e) => vm.onSheetAttachClick(e));
+              el.addEventListener('keydown', (e) => {
+                if (vm.sheetEdit.open) {
+                  e.stopPropagation();
+                  e.preventDefault();
+                }
+              }, true);
             }
             vm.paintAttachCells();
           });
@@ -4671,23 +4718,34 @@
           }
         },
         openSheetAttach(rec, col, cell) {
+          this.openSheetFieldEditor(rec, col, cell, '');
+        },
+        openSheetFieldEditor(rec, col, cell, seed) {
           if (!rec || !col) return;
           const r = cell && cell.getBoundingClientRect ? cell.getBoundingClientRect() : { left: 80, bottom: 80, width: 260 };
           this._holdSheetEdit = true;
+          this.editSeed = seed != null && seed !== '' ? String(seed) : '';
           this.sheetEdit = {
             open: true,
             rec,
             col,
             style: {
-              left: Math.min(r.left, window.innerWidth - 340) + 'px',
-              top: (r.bottom + 4) + 'px',
+              left: Math.min(Math.max(8, r.left), window.innerWidth - 340) + 'px',
+              top: Math.min(r.bottom + 4, window.innerHeight - 88) + 'px',
               width: Math.max(280, r.width) + 'px'
             }
           };
-          setTimeout(() => { this._holdSheetEdit = false; }, 120);
+          clearTimeout(this._holdSheetEditTimer);
+          this._holdSheetEditTimer = setTimeout(() => { this._holdSheetEdit = false; }, 400);
+        },
+        consumeTypedSeed() {
+          const s = this._typedSeed || '';
+          this._typedSeed = '';
+          return s;
         },
         commitSheetEdit(payload) {
           this.commitPayload(payload);
+          this.sheetEdit.open = false;
           this.$nextTick(() => this.refreshSheetValues());
         },
         recordNumber(rec) {
@@ -6540,6 +6598,7 @@
         },
         keysBlockedByUi() {
           if (this.docReaderOpen) return true;
+          if (this.sheetEdit.open) return true;
           return !!(this.needsSetup || this.pinOpen || this.colEditor.open || this.tableEditor.open || this.groupEditor.open || this.rowAudit.open || this.confirmDlg.open || this.settingsOpen || this.fieldsOpen || this.auditOpen);
         },
         emptyValueFor(col) {
@@ -6568,6 +6627,14 @@
           return cleared > 0 || locked > 0;
         },
         onWinKey(e) {
+          if (!this.typingInField(e.target) && e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            this._typedSeed = e.key;
+          }
+          if (this.sheetEdit.open && e.key === 'Escape' && !this.typingInField(e.target)) {
+            e.preventDefault();
+            this.sheetEdit.open = false;
+            return;
+          }
           if (this.docReaderOpen && e.key === 'Escape') {
             e.preventDefault();
             this.closeDocReader();
@@ -8084,6 +8151,12 @@
           if (guessColumnType(['1', '2', '3']) !== 'number') console.warn('guess number type failed');
           if (guessColumnType(['01/01/2026', '02/01/2026']) !== 'date') console.warn('guess date type failed');
           if (guessColumnType(['a@b.com']) !== 'email') console.warn('guess email type failed');
+          const ordTbl = sample.tables.find((t) => t.name === 'Orders');
+          const searchCustCol = ordTbl.columns.find((c) => c.name === 'Customer');
+          const br = searchLinkHits(sample, searchCustCol, 'br', 20).map((x) => x.label);
+          if (!br.some((n) => /brondby/i.test(n))) console.warn('search type-ahead did not match Brondby on br', br);
+          const ac = searchLinkHits(sample, searchCustCol, 'ac', 20).map((x) => x.label);
+          if (!ac.some((n) => /acme/i.test(n))) console.warn('search type-ahead did not match Acme on ac', ac);
           console.warn = origWarn;
           window.__forgegridTestWarns = warns;
         },
@@ -8109,8 +8182,10 @@
             }
           });
         },
-        onDocClick() {
+        onDocClick(e) {
           if (this._holdFillMenu || this._holdSheetEdit) return;
+          const t = e && e.target;
+          if (t && t.closest && (t.closest('.sheet-edit-pop') || t.closest('.search-drop'))) return;
           this.moreOpen = false;
           this.closeCtxMenu();
           this.fillMenu.open = false;
