@@ -1611,6 +1611,11 @@
         (t.records || []).forEach((r) => {
           if (!Array.isArray(r.audit)) r.audit = [];
           if (r.locked == null) r.locked = false;
+          (t.columns || []).forEach((c) => {
+            if (!r.data) return;
+            const v = r.data[c.id];
+            if (isTextColumn(c) && typeof v === 'number' && Number.isFinite(v)) r.data[c.id] = String(v);
+          });
         });
       });
       if (!store.recipes.length && store.tables.some((t) => t.id === 'tbl_orders')) {
@@ -1640,6 +1645,10 @@
     function findColumn(table, id) { return table && table.columns.find((c) => c.id === id); }
     function isLinkCol(col) {
       return !!(col && (col.type === 'link' || col.type === 'search') && col.link);
+    }
+    function isTextColumn(col) {
+      const t = col && col.type;
+      return t === 'text' || t === 'longtext' || t === 'search' || t === 'email' || t === 'phone' || t === 'url';
     }
     function colByName(table, name) {
       const n = String(name || '').trim().toLowerCase();
@@ -2176,15 +2185,9 @@
     }
 
     function valuesEqual(a, b) {
-      if (a == null || b == null || a === '') return false;
-      if (b === '') return false;
+      if (a == null || b == null || a === '' || b === '') return false;
       if (a === b) return true;
-      const sa = String(a).trim().toLowerCase();
-      const sb = String(b).trim().toLowerCase();
-      if (sa === sb) return true;
-      const na = Number(String(a).replace(/[$,]/g, ''));
-      const nb = Number(String(b).replace(/[$,]/g, ''));
-      return Number.isFinite(na) && Number.isFinite(nb) && na === nb;
+      return lookupValuesMatch(a, b);
     }
 
     function xlookupRecord(store, tableId, matchColumnId, key) {
@@ -2615,6 +2618,13 @@
       return String(raw).replace(/\s+/g, ' ').trim();
     }
 
+    function recipeMapValue(map, raw) {
+      const text = String(raw == null ? '' : raw).replace(/\s+/g, ' ').trim();
+      if (!text) return '';
+      if (map && map.fill === 'lookup') return text;
+      return transformRecipeValue(text, map && map.transform);
+    }
+
     function recipeFieldValue(text, field) {
       if (!field) return '';
       if (field.regex) {
@@ -2647,9 +2657,54 @@
       return { tableId: '', matchColumnId: '', out: 'link', match: 'contains', also: [] };
     }
 
+    function canonicalLookupKeys(v) {
+      if (v == null || v === '') return [];
+      if (typeof v === 'object') {
+        if (v.id && !Array.isArray(v)) v = v.name || v.str || v.id;
+        else return [];
+      }
+      const raw = String(v).replace(/\u00a0/g, ' ').trim();
+      if (!raw) return [];
+      const out = [];
+      const add = (s) => {
+        if (s == null || s === '') return;
+        const t = String(s).trim();
+        if (t && out.indexOf(t) < 0) out.push(t);
+        const low = t.toLowerCase();
+        if (low && out.indexOf(low) < 0) out.push(low);
+      };
+      add(raw);
+      const compact = raw.replace(/[\s']/g, '');
+      add(compact);
+      const noGroup = compact.replace(/,(?=\d{3}(\D|$))/g, '');
+      add(noGroup);
+      const dk = compact.replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.');
+      add(dk);
+      ;[compact, noGroup, dk].forEach((s) => {
+        const n = Number(s);
+        if (!Number.isFinite(n)) return;
+        add(String(n));
+        if (Math.abs(n - Math.round(n)) < 1e-6) add(String(Math.round(n)));
+      });
+      const digits = raw.replace(/\D/g, '');
+      if (digits.length >= 3 && digits.length <= 18) add(digits);
+      return out;
+    }
+
+    function lookupValuesMatch(a, b) {
+      const A = canonicalLookupKeys(a);
+      const B = canonicalLookupKeys(b);
+      if (!A.length || !B.length) return false;
+      for (let i = 0; i < A.length; i++) {
+        if (B.indexOf(A[i]) >= 0) return true;
+      }
+      return false;
+    }
+
     function recipeTextMatch(a, b, mode) {
-      const x = String(a || '').toLowerCase().trim();
-      const y = String(b || '').toLowerCase().trim();
+      if (lookupValuesMatch(a, b)) return true;
+      const x = String(a == null ? '' : a).toLowerCase().trim();
+      const y = String(b == null ? '' : b).toLowerCase().trim();
       if (!x || !y) return false;
       if (x === y) return true;
       if (mode === 'equals') return false;
@@ -2661,16 +2716,7 @@
     }
 
     function valuesEqualNeedle(needle, shown, stored) {
-      const n = String(needle == null ? '' : needle).trim();
-      const a = String(shown == null ? '' : shown).trim();
-      const b = stored == null ? '' : String(stored).trim();
-      if (!n) return false;
-      if (a.toLowerCase() === n.toLowerCase() || b.toLowerCase() === n.toLowerCase()) return true;
-      if (/^\d+(\.0+)?$/.test(n)) {
-        const num = Number(n);
-        if (Number.isFinite(num) && (Number(stored) === num || Number(shown) === num)) return true;
-      }
-      return false;
+      return lookupValuesMatch(needle, shown) || lookupValuesMatch(needle, stored);
     }
 
     function scanTableForNeedle(store, table, needle) {
@@ -2925,7 +2971,7 @@
       const maps = recipe.maps || [];
       const header = {};
       maps.filter((m) => m.role !== 'line').forEach((m) => {
-        header[m.columnId] = transformRecipeValue(readClickMap(pages, m), m.transform);
+        header[m.columnId] = recipeMapValue(m, readClickMap(pages, m));
       });
       const lineMaps = maps.filter((m) => m.role === 'line');
       const lines = [];
@@ -2949,9 +2995,9 @@
           lineMaps.forEach((m) => {
             const it = nearestPdfItem(items, m.nx + m.nw / 2, c.y, 0.045, 0.012);
             if (!it) return;
-            const val = transformRecipeValue(it.str, m.transform);
+            const val = recipeMapValue(m, it.str);
             if (val === '' || val == null) return;
-            if ((m.transform === 'number' || m.transform === 'number-dk') && typeof val !== 'number') return;
+            if (m.fill !== 'lookup' && (m.transform === 'number' || m.transform === 'number-dk') && typeof val !== 'number') return;
             row[m.columnId] = val;
             filled += 1;
           });
@@ -5829,6 +5875,7 @@
             if (col.min != null && Number(value) < col.min) { if (!quiet) this.toast(col.name + ' is below minimum.', 'error'); return false; }
             if (col.max != null && Number(value) > col.max) { if (!quiet) this.toast(col.name + ' is above maximum.', 'error'); return false; }
           }
+          if (isTextColumn(col) && value != null && value !== '' && !isAttachMeta(value)) value = String(value);
           rec.data[col.id] = value;
           if (rec.fx) delete rec.fx[col.id];
           rec.updatedAt = nowIso();
@@ -6955,6 +7002,12 @@
           } else {
             map.lookup = emptyRecipeLookup();
           }
+          if (map.fill === 'lookup' && map.lookup && map.lookup.tableId) {
+            const matchC = findColumn(findTable(this.store, map.lookup.tableId), map.lookup.matchColumnId);
+            if (isTextColumn(matchC) || isTextColumn(mapCol) || isLinkCol(mapCol)) map.transform = 'text';
+          } else if (isTextColumn(mapCol)) {
+            map.transform = 'text';
+          }
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
           this.recipeDraft.maps = this.recipeDraft.maps.filter((m) => !(m.columnId === map.columnId && m.role === map.role));
           this.recipeDraft.maps.push(map);
@@ -7580,6 +7633,17 @@
           if (resolveRecipeFill(lkWs, custF, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('customer lookup failed');
           const prodF = remR.lineFields.find((f) => f.columnId === 'col_l_prod');
           if (resolveRecipeFill(lkWs, prodF, '306832') !== 'rec_prod_snaps') console.warn('product sku lookup failed');
+          const packed = { id: 'tbl_pack', name: 'Packed Products', columns: [
+            { id: 'col_pn', name: 'Packed Product Name', type: 'text' },
+            { id: 'col_pc', name: 'Customer Product Code', type: 'number', decimals: 0 }
+          ], records: [{ id: 'rec_pack_1', data: { col_pn: '125g flowbag', col_pc: 306832 } }] };
+          lkWs.tables.push(packed);
+          const packMap = { fill: 'lookup', lookup: { tableId: packed.id, matchColumnId: 'col_pc', match: 'equals', out: 'link' } };
+          if (resolveRecipeFill(lkWs, packMap, '306832') !== 'rec_pack_1') console.warn('number vs text product code lookup failed');
+          packed.records[0].data.col_pc = '306832';
+          if (resolveRecipeFill(lkWs, packMap, 306832) !== 'rec_pack_1') console.warn('text vs number product code lookup failed');
+          packed.records[0].data.col_pc = '306832.0';
+          if (resolveRecipeFill(lkWs, packMap, '306832') !== 'rec_pack_1') console.warn('decimal-zero product code lookup failed');
           const productsT = lkWs.tables.find((x) => x.name === 'Products');
           const prodNameCol = productsT.columns.find((c) => c.name === 'Name');
           const nameAsKey = { fill: 'lookup', lookup: { tableId: productsT.id, matchColumnId: prodNameCol.id, match: 'equals', out: 'link' } };
