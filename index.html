@@ -92,6 +92,12 @@
     .paper-doc:hover svg { filter: drop-shadow(0 0 4px rgba(62,207,190,.45)); }
     .paper-doc.empty { opacity: .55; }
     .paper-doc.empty:hover { opacity: 1; }
+    .forge-sheet .jexcel > tbody > tr > td.sheet-attach-td { cursor: copy; }
+    .forge-sheet .jexcel > tbody > tr > td.sheet-attach-td.attach-drop,
+    .forge-sheet .jexcel > tbody > tr > td.sheet-attach-td .attach-chip.drop {
+      outline: 1px dashed #3ecfbe;
+      background: rgba(62,207,190,.12) !important;
+    }
     .attach-chip.form-chip .paper-doc { width: 28px; height: 36px; }
     .attach-chip .act { flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #8ea0be; display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
     .attach-chip .act:hover { background: #1c2b48; color: #d7e0f2; }
@@ -3548,7 +3554,7 @@
           + (locked ? '' : '<button type="button" class="act" data-fg-act="clear" title="Remove attachment">' + attachActSvg('<path d="M6 6l12 12M18 6L6 18"/>') + '</button>')
           + '</div>';
       }
-      return '<div class="attach-chip sheet-attach"><button type="button" class="paper-doc empty" data-fg-act="pick"' + (locked ? ' disabled' : '') + ' title="' + (locked ? 'No file' : 'Attach a file') + '">' + PAPER_EMPTY_SVG + '</button></div>';
+      return '<div class="attach-chip sheet-attach"><button type="button" class="paper-doc empty" data-fg-act="pick"' + (locked ? ' disabled' : '') + ' title="' + (locked ? 'Unlock the row to attach a file' : 'Drop a file here, or click to choose') + '">' + PAPER_EMPTY_SVG + '</button></div>';
     }
 
     const attachmentBlobs = new Map();
@@ -3779,7 +3785,7 @@
               <path d="M8 19h16M8 24h11M8 29h14" fill="none" stroke="#9a9382" stroke-width="1.6" stroke-linecap="round"/>
             </svg>
           </button>
-          <button v-else type="button" class="paper-doc empty" :disabled="locked" :title="locked ? 'No file' : 'Attach a file'" @click="pick">
+          <button v-else type="button" class="paper-doc empty" :disabled="locked" :title="locked ? 'Unlock the row to attach a file' : 'Drop a file here, or click to choose'" @click="pick">
             <svg viewBox="0 0 32 40" aria-hidden="true">
               <path d="M5 2.5h14.5L29 12v24.5A2.5 2.5 0 0 1 26.5 39h-21A2.5 2.5 0 0 1 3 36.5v-32A2.5 2.5 0 0 1 5.5 2.5H5z" fill="none" stroke="#8ea0be" stroke-width="1.6"/>
               <path d="M19.5 2.5V11a1 1 0 0 0 1 1H29" fill="none" stroke="#8ea0be" stroke-width="1.6"/>
@@ -4862,6 +4868,9 @@
             if (!el._fgAttachBound) {
               el._fgAttachBound = true;
               el.addEventListener('click', (e) => vm.onSheetAttachClick(e));
+              el.addEventListener('dragover', (e) => vm.onSheetAttachDragOver(e), true);
+              el.addEventListener('dragleave', (e) => vm.onSheetAttachDragLeave(e), true);
+              el.addEventListener('drop', (e) => vm.onSheetAttachDrop(e), true);
               el.addEventListener('keydown', (e) => {
                 if (vm.sheetEdit.open) {
                   e.stopPropagation();
@@ -4879,7 +4888,9 @@
           if (!col || !rec || effectiveColumn(rec, col).type !== 'attachment') return;
           const meta = isAttachMeta(rawStored(rec, col)) ? rawStored(rec, col) : null;
           td.innerHTML = attachSheetHtml(meta, !!rec.locked);
-          td.style.cursor = 'pointer';
+          td.classList.add('sheet-attach-td');
+          td.classList.toggle('sheet-attach-empty', !meta);
+          td.style.cursor = rec.locked ? 'default' : 'copy';
         },
         paintAttachCells() {
           const el = this.$refs.sheetHost;
@@ -4901,24 +4912,69 @@
           });
           input.click();
         },
-        onSheetAttachClick(e) {
-          const act = e.target && e.target.closest && e.target.closest('[data-fg-act]');
+        sheetAttachFromEvent(e) {
           const td = e.target && e.target.closest && e.target.closest('td[data-x][data-y]');
-          if (!td || td.classList.contains('jexcel_row')) return;
+          if (!td || td.classList.contains('jexcel_row')) return null;
           const x = Number(td.getAttribute('data-x'));
           const y = Number(td.getAttribute('data-y'));
           const col = this.visibleColumns[x];
           const rec = this.filteredRecords[y];
-          if (!col || !rec || effectiveColumn(rec, col).type !== 'attachment') return;
+          if (!col || !rec || effectiveColumn(rec, col).type !== 'attachment') return null;
+          return { td, rec, col };
+        },
+        clearSheetAttachDrop() {
+          const el = this.$refs.sheetHost;
+          if (!el) return;
+          el.querySelectorAll('td.attach-drop, .attach-chip.drop').forEach((n) => n.classList.remove('attach-drop', 'drop'));
+        },
+        onSheetAttachDragOver(e) {
+          const hit = this.sheetAttachFromEvent(e);
+          if (!hit || hit.rec.locked) return;
+          if (!e.dataTransfer) return;
+          const kinds = Array.from(e.dataTransfer.types || []);
+          if (kinds.length && !kinds.includes('Files')) return;
           e.preventDefault();
           e.stopPropagation();
-          const meta = isAttachMeta(rawStored(rec, col)) ? rawStored(rec, col) : null;
+          e.dataTransfer.dropEffect = 'copy';
+          this.clearSheetAttachDrop();
+          hit.td.classList.add('attach-drop');
+          const chip = hit.td.querySelector('.attach-chip');
+          if (chip) chip.classList.add('drop');
+        },
+        onSheetAttachDragLeave(e) {
+          const hit = this.sheetAttachFromEvent(e);
+          if (!hit) return;
+          const next = e.relatedTarget;
+          if (next && hit.td.contains(next)) return;
+          hit.td.classList.remove('attach-drop');
+          const chip = hit.td.querySelector('.attach-chip');
+          if (chip) chip.classList.remove('drop');
+        },
+        async onSheetAttachDrop(e) {
+          const hit = this.sheetAttachFromEvent(e);
+          this.clearSheetAttachDrop();
+          if (!hit || hit.rec.locked) return;
+          const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+          if (!file) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const meta = await fileToAttachMeta(file);
+          this.commitPayload({ record: hit.rec, column: hit.col, value: meta });
+          this.$nextTick(() => this.refreshSheetValues());
+        },
+        onSheetAttachClick(e) {
+          const hit = this.sheetAttachFromEvent(e);
+          if (!hit) return;
+          const act = e.target && e.target.closest && e.target.closest('[data-fg-act]');
+          e.preventDefault();
+          e.stopPropagation();
+          const meta = isAttachMeta(rawStored(hit.rec, hit.col)) ? rawStored(hit.rec, hit.col) : null;
           const kind = act ? act.getAttribute('data-fg-act') : (meta ? 'open' : 'pick');
-          if (kind === 'open' && meta) this.openAttachment({ meta, record: rec, popout: false });
-          else if (kind === 'popout' && meta) this.openAttachment({ meta, record: rec, popout: true });
-          else if (kind === 'pick') this.pickSheetAttach(rec, col);
+          if (kind === 'open' && meta) this.openAttachment({ meta, record: hit.rec, popout: false });
+          else if (kind === 'popout' && meta) this.openAttachment({ meta, record: hit.rec, popout: true });
+          else if (kind === 'pick') this.pickSheetAttach(hit.rec, hit.col);
           else if (kind === 'clear') {
-            this.commitPayload({ record: rec, column: col, value: null });
+            this.commitPayload({ record: hit.rec, column: hit.col, value: null });
             this.$nextTick(() => this.refreshSheetValues());
           }
         },
