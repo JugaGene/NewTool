@@ -405,7 +405,8 @@
             </div>
             <div v-else class="h-full rounded-xl border border-line bg-ink-950 overflow-hidden relative" :class="recipeTeach.active && 'pdf-teach'">
               <div v-if="activeDoc.kind==='pdf'" class="h-full overflow-auto bg-white">
-                <div v-if="!pdfView.pages.length" class="h-full grid place-items-center text-ink-900 text-sm">Reading PDF…</div>
+                <iframe v-if="!pdfView.pages.length && activeDoc.url" :src="activeDoc.url + '#toolbar=0&navpanes=0&view=FitH'" class="w-full h-full min-h-[70vh] border-0 bg-white" title="PDF preview"></iframe>
+                <div v-else-if="!pdfView.pages.length" class="h-full grid place-items-center text-ink-900 text-sm">{{ pdfView.error || 'No PDF bytes to show. Use Open file again.' }}</div>
                 <div v-for="page in pdfView.pages" :key="(activeDoc && activeDoc.id) + '-' + page.num" class="pdf-page mx-auto">
                   <canvas :ref="el => renderPdfCanvas(page, el)" :width="page.width" :height="page.height"></canvas>
                   <div class="pdf-hits">
@@ -3539,6 +3540,17 @@
         </div>`
     };
 
+    function openPdfDocument(spec) {
+      const lib = window.pdfjsLib;
+      if (!lib) return Promise.reject(new Error('pdf.js missing'));
+      const src = Object.assign({ disableWorker: true, isEvalSupported: false }, spec);
+      const task = lib.getDocument(src);
+      return Promise.race([
+        task.promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('PDF timed out')), 20000))
+      ]);
+    }
+
     if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
       window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
     }
@@ -3634,7 +3646,7 @@
           recipeHint: '',
           recipePreview: '',
           recipeTeach: { active: false, colId: '', line: false },
-          pdfView: { pages: [], src: '' }
+          pdfView: { pages: [], src: '', error: '' }
         };
       },
       computed: {
@@ -3956,8 +3968,8 @@
           this.$nextTick(() => this.bindSheet());
         },
         activeDoc(doc) {
-          if (doc && doc.kind === 'pdf' && doc.url) this.loadPdfView(doc);
-          else this.pdfView = { pages: [], src: '' };
+          if (doc && doc.kind === 'pdf') this.loadPdfView(doc);
+          else this.pdfView = { pages: [], src: '', error: '' };
           this.sendUndockPdf();
         },
         recipeTeach: {
@@ -6597,7 +6609,7 @@
           if (doc.kind === 'pdf') {
             try {
               const data = await this.pdfBytes(doc);
-              const pdf = await window.pdfjsLib.getDocument({ data }).promise;
+              const pdf = await openPdfDocument({ data });
               return this.extractPdfTextFromPdf(pdf);
             } catch (e) {
               return this.extractPdfText(doc.url);
@@ -6610,9 +6622,14 @@
           if (doc && doc.file) return new Uint8Array(await doc.file.arrayBuffer());
           const url = doc && doc.url;
           if (!url) throw new Error('no pdf');
-          const res = await fetch(url);
-          if (!res.ok) throw new Error('pdf fetch');
-          return new Uint8Array(await res.arrayBuffer());
+          try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('pdf fetch');
+            return new Uint8Array(await res.arrayBuffer());
+          } catch (e) {
+            if (doc.file) return new Uint8Array(await doc.file.arrayBuffer());
+            throw e;
+          }
         },
         async extractPdfText(url) {
           if (!window.pdfjsLib) throw new Error('pdf.js missing');
@@ -6622,10 +6639,10 @@
             if (!res.ok) throw new Error('pdf fetch');
             data = new Uint8Array(await res.arrayBuffer());
           } catch (e) {
-            const pdf = await window.pdfjsLib.getDocument({ url, withCredentials: false }).promise;
+            const pdf = await openPdfDocument({ url, withCredentials: false });
             return this.extractPdfTextFromPdf(pdf);
           }
-          const pdf = await window.pdfjsLib.getDocument({ data }).promise;
+          const pdf = await openPdfDocument({ data });
           return this.extractPdfTextFromPdf(pdf);
         },
         async extractPdfTextFromPdf(pdf) {
@@ -6840,7 +6857,7 @@
           if (!doc || !window.pdfjsLib) return [];
           if (doc._pdfPages && doc._pdfPages.length) return doc._pdfPages;
           const data = await this.pdfBytes(doc);
-          const pdf = await window.pdfjsLib.getDocument({ data }).promise;
+          const pdf = await openPdfDocument({ data });
           const pages = [];
           for (let p = 1; p <= pdf.numPages; p++) {
             const page = await pdf.getPage(p);
@@ -6862,18 +6879,18 @@
           return pages;
         },
         async loadPdfView(doc) {
-          if (!doc || !window.pdfjsLib) return;
-          const key = doc.id || doc.url;
+          if (!doc) return;
+          this._pdfLoad = (this._pdfLoad || 0) + 1;
+          const token = this._pdfLoad;
+          const key = doc.id || doc.url || '';
           try {
+            if (!doc.url && doc.file) doc.url = URL.createObjectURL(doc.file);
             const pages = await this.parsePdfPages(doc);
-            if ((this.activeDoc && this.activeDoc.id) !== (doc.id) && this.pdfView.src && this.pdfView.src !== key) {
-              /* another doc became active */
-            }
-            if (!this.activeDoc || this.activeDoc.id !== doc.id) return;
-            this.pdfView = { pages, src: key };
+            if (token !== this._pdfLoad) return;
+            this.pdfView = { pages, src: key, error: '' };
           } catch (e) {
-            this.recipeHint = 'Could not render this PDF. Try Open file again.';
-            this.toast('This PDF did not draw. Re-open the file from the paper icon or Docs → Open file.', 'warn');
+            if (token !== this._pdfLoad) return;
+            this.pdfView = { pages: [], src: key, error: 'Could not parse this PDF. The preview below is the browser viewer.' };
           }
         },
         renderPdfCanvas(pg, canvas) {
