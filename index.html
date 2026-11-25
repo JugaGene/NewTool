@@ -1164,7 +1164,7 @@
                 <input type="checkbox" class="accent-teal" v-model="recipeDraft.lineUnique.enabled" :disabled="mode!=='architect'" />
                 One Line Items row per unique product number
               </label>
-              <p class="text-[11px] text-mute">Clicks on this PDF only teach the column. The next købsordre can list different products in a different order — Fill still creates one row per unique number in that column (crates ending in 15 skipped).</p>
+              <p class="text-[11px] text-mute">Clicks on this PDF only teach the column. Map Qty / boxes on a product line (not once on the header) so 360, 1.344 and 720 stay with the packed product those SKUs look up. Crates ending in 15 are skipped; the Europool qty still belongs to the product above it.</p>
               <label v-if="recipeDraft.lineUnique && recipeDraft.lineUnique.enabled" class="text-[11px] text-mute block">Unique key column
                 <select v-model="recipeDraft.lineUnique.columnId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-2 py-1 text-[12px] text-mist" :disabled="mode!=='architect'">
                   <option value="">product number on the line</option>
@@ -2692,12 +2692,12 @@
         ],
         lineSkip: { enabled: true, columnId: l.notes, rules: [{ op: 'endsWith', value: '15' }] },
         lineUnique: { enabled: true, columnId: l.notes },
-        lineRegex: '(\\d{6})\\s+(.+?)\\s+(\\d+)\\s+(Ks\\.|Kolli|Kg|Stk)\\s+([\\d.]+,\\d{2})',
+        lineRegex: '(\\d{6})\\s+(.+?)\\s+([\\d.]+)\\s+(Ks\\.|Kolli|Kg|Stk)\\s+([\\d.]+,\\d{2})',
         lineFields: [
           { group: 1, columnId: l.notes, transform: 'text', label: 'Item number', fill: 'pdf' },
           { group: 1, columnId: 'col_l_prod', transform: 'text', fill: 'lookup', lookup: { tableId: 'tbl_products', matchColumnId: 'col_p_sku', out: 'link', match: 'equals' } },
           { group: 1, columnId: 'col_l_itemno', transform: 'number', fill: 'lookup', lookup: { tableId: 'tbl_products', matchColumnId: 'col_p_sku', out: 'col_p_no', match: 'equals' } },
-          { group: 3, columnId: l.qty, transform: 'number', label: 'Qty', fill: 'pdf' },
+          { group: 3, columnId: l.qty, transform: 'number-dk', label: 'Qty', fill: 'pdf' },
           { group: 5, columnId: l.price, transform: 'number-dk', label: 'Unit price', fill: 'pdf' }
         ]
       };
@@ -2717,11 +2717,39 @@
     }
 
     function parseDkNumber(s) {
-      let t = String(s || '').trim().replace(/\s/g, '');
+      let t = String(s || '').trim().replace(/[\s\u00a0]/g, '');
       if (!t) return '';
       if (t.indexOf(',') >= 0) t = t.replace(/\./g, '').replace(',', '.');
+      else if (/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
       const n = Number(t);
       return Number.isFinite(n) ? n : '';
+    }
+
+    function isMoneySample(s) {
+      return /,\d{2}$/.test(String(s == null ? '' : s).replace(/[\s\u00a0]/g, ''));
+    }
+
+    function isQtyToken(s) {
+      const t = String(s == null ? '' : s).replace(/[\s\u00a0]/g, '');
+      if (!t || isMoneySample(t) || skuLikeSample(t)) return false;
+      if (/^\d{1,3}(\.\d{3})+$/.test(t)) return true;
+      return /^\d{1,5}$/.test(t);
+    }
+
+    function qtyLikeColumnName(name) {
+      const n = String(name || '').toLowerCase();
+      if (/packed/.test(n)) return false;
+      return /(qty|quantity|antal|boxes|box count|\bkasser\b)/.test(n);
+    }
+
+    function qtyLikeColumn(col) {
+      return !!(col && qtyLikeColumnName(col.name || col.id));
+    }
+
+    function isQtyLikeMap(m) {
+      if (!m || isMoneySample(m.sample)) return false;
+      if (qtyLikeColumnName(m.columnId)) return true;
+      return isQtyToken(m.sample);
     }
 
     function parseDkDate(s) {
@@ -2737,9 +2765,10 @@
 
     function transformRecipeValue(raw, kind) {
       if (raw == null || raw === '') return '';
-      if (kind === 'number-dk') return parseDkNumber(raw);
-      if (kind === 'number') {
-        const n = Number(String(raw).replace(/\s/g, ''));
+      if (kind === 'number-dk' || kind === 'number') {
+        const dk = parseDkNumber(raw);
+        if (dk !== '' && dk != null) return dk;
+        const n = Number(String(raw).replace(/[\s\u00a0]/g, ''));
         return Number.isFinite(n) ? n : '';
       }
       if (kind === 'date-dk') return parseDkDate(raw);
@@ -2987,6 +3016,54 @@
     function itemsOnPdfLine(items, y, tol) {
       const band = tol == null ? 0.012 : tol;
       return (items || []).filter((it) => Math.abs((it.ny + it.nh / 2) - y) <= band);
+    }
+
+    function joinLineNumberTokens(items, y) {
+      const band = itemsOnPdfLine(items, y, 0.016).slice().sort((a, b) => a.nx - b.nx);
+      const merged = [];
+      band.forEach((it) => {
+        const last = merged[merged.length - 1];
+        const gap = last ? it.nx - (last.nx + last.nw) : 99;
+        const a = String((last && last.str) || '');
+        const b = String(it.str || '');
+        if (last && gap < 0.012 && /[\d.]$/.test(a) && /^[\d.]/.test(b)) {
+          last.str = a + b;
+          last.nw = (it.nx + it.nw) - last.nx;
+        } else merged.push({ str: b, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh });
+      });
+      return merged;
+    }
+
+    function readQtyOnLine(items, map, y) {
+      const cx = (map && map.nx != null) ? map.nx + (map.nw || 0) / 2 : 0.5;
+      const merged = joinLineNumberTokens(items, y);
+      const qtyHits = merged.filter((it) => isQtyToken(it.str));
+      const units = merged.filter((it) => /^(ks\.?|kolli|kg|stk)$/i.test(String(it.str || '').trim()));
+      if (units.length) {
+        const u = units[0];
+        const before = qtyHits.filter((it) => it.nx + it.nw <= u.nx + 0.02).sort((a, b) => b.nx - a.nx)[0];
+        if (before) return before.str;
+      }
+      let best = null;
+      let bestD = 99;
+      qtyHits.forEach((it) => {
+        const dx = Math.abs((it.nx + it.nw / 2) - cx);
+        if (dx > 0.22) return;
+        if (dx < bestD) { bestD = dx; best = it; }
+      });
+      if (best) return best.str;
+      const near = nearestPdfItem(items, cx, y, 0.14, 0.02);
+      return near && isQtyToken(near.str) ? near.str : '';
+    }
+
+    function crateQtyBelow(items, map, y) {
+      const crates = (items || []).filter((it) => {
+        if (!/europool|kasse/i.test(String(it.str || ''))) return false;
+        const cy = it.ny + it.nh / 2;
+        return cy > y + 0.004 && cy < y + 0.09;
+      }).sort((a, b) => a.ny - b.ny);
+      if (!crates.length) return '';
+      return readQtyOnLine(items, map, crates[0].ny + crates[0].nh / 2);
     }
 
     function extractRecipeLines(text, recipe) {
@@ -3319,6 +3396,7 @@
       const t = String(s || '').trim();
       if (/^\d{1,2}[-./]\d{1,2}[-./]\d{2,4}$/.test(t)) return 'date-dk';
       if (/^\d{1,3}(\.\d{3})*,\d{2}$/.test(t) || /^\d+,\d{2}$/.test(t)) return 'number-dk';
+      if (/^\d{1,3}(\.\d{3})+$/.test(t)) return 'number-dk';
       if (/^\d+$/.test(t)) return 'number';
       return 'text';
     }
@@ -3489,11 +3567,18 @@
 
     function extractFromMaps(pages, recipe) {
       const maps = recipe.maps || [];
+      const skuLine = maps.some((m) => m.role === 'line' && (skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample))));
       const header = {};
       maps.filter((m) => m.role !== 'line').forEach((m) => {
+        if (skuLine && isQtyLikeMap(m)) return;
         header[m.columnId] = recipeMapValue(m, readClickMap(pages, m));
       });
-      const lineMaps = maps.filter((m) => m.role === 'line');
+      let lineMaps = maps.filter((m) => m.role === 'line');
+      if (skuLine) {
+        maps.filter((m) => m.role !== 'line' && isQtyLikeMap(m)).forEach((m) => {
+          if (!lineMaps.some((x) => x.columnId === m.columnId)) lineMaps = lineMaps.concat([m]);
+        });
+      }
       const lines = [];
       if (lineMaps.length) {
         const skuMap = lineMaps.find((m) => skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample)));
@@ -3519,9 +3604,15 @@
           const row = {};
           let filled = 0;
           lineMaps.forEach((m) => {
-            const it = nearestPdfItem(items, m.nx + m.nw / 2, c.y, 0.045, 0.012);
-            if (!it) return;
-            const val = recipeMapValue(m, it.str);
+            let raw = '';
+            if (isQtyLikeMap(m)) {
+              raw = readQtyOnLine(items, m, c.y) || crateQtyBelow(items, m, c.y);
+            } else {
+              const it = nearestPdfItem(items, m.nx + m.nw / 2, c.y, 0.045, 0.012);
+              raw = it ? it.str : '';
+            }
+            if (raw === '' || raw == null) return;
+            const val = recipeMapValue(m, raw);
             if (val === '' || val == null) return;
             if (m.fill !== 'lookup' && (m.transform === 'number' || m.transform === 'number-dk') && typeof val !== 'number') return;
             row[m.columnId] = val;
@@ -7787,7 +7878,9 @@
           const mapCol = this.teachColumns.find((c) => c.id === this.recipeTeach.colId && (!pickRole || c.teachRole === pickRole))
             || this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
           ensureRecipeLineTable(this.store, this.recipeDraft);
-          const lineCol = pickRole === 'line' || !!(mapCol && mapCol.teachRole === 'line') || (this.recipeTeach.line && skuLikeSample(sample)) || (skuLikeSample(sample) && findColumn(findTable(this.store, this.recipeDraft.lineTableId), this.recipeTeach.colId));
+          const hasProductLines = (this.recipeDraft.maps || []).some((m) => m.role === 'line' && (skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample))));
+          const qtyForPacked = (hasProductLines || this.recipeTeach.line) && isQtyToken(sample) && (qtyLikeColumn(mapCol) || isQtyToken(sample));
+          const lineCol = pickRole === 'line' || !!(mapCol && mapCol.teachRole === 'line') || qtyForPacked || (this.recipeTeach.line && skuLikeSample(sample)) || (skuLikeSample(sample) && findColumn(findTable(this.store, this.recipeDraft.lineTableId), this.recipeTeach.colId));
           if (lineCol) this.recipeTeach.line = true;
           let transform = guessTransform(sample);
           if (transform === 'number' && mapCol && (isLinkCol(mapCol) || mapCol.type === 'text' || mapCol.type === 'search' || /product|sku|customer/i.test(mapCol.name || ''))) {
@@ -7865,8 +7958,13 @@
           if (map.role === 'line') {
             normalizeLineSkip(this.recipeDraft);
             if (skuLikeSample(sample) && !this.recipeDraft.lineSkip.enabled) this.recipeDraft.lineSkip.enabled = true;
-            this.recipeHint = 'Mapped the product-number column from ' + sample + '. Other PDFs can have different SKUs in this column — Fill will take each unique number (skip crates ending in 15).';
-            this.toast('Column mapped. Later orders with different products still fill — unique numbers only.');
+            if (isQtyToken(sample) && !skuLikeSample(sample)) {
+              this.recipeHint = 'Box amount ' + sample + ' is tied to that packed product line. Other SKUs keep their own counts (360, 1.344, 720) — the first number is not copied onto every row.';
+              this.toast('Qty follows each packed product, not the first line only.');
+            } else {
+              this.recipeHint = 'Mapped the product-number column from ' + sample + '. Other PDFs can have different SKUs in this column — Fill will take each unique number (skip crates ending in 15). Then map Qty on a product line so each packed product gets its own box count.';
+              this.toast('Column mapped. Later orders with different products still fill — unique numbers only.');
+            }
           } else {
             this.recipeTeach.colId = '';
             this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
@@ -8183,17 +8281,20 @@
             }
             let filled = 0;
             const packedColEarly = packedProductColumn(headerTable);
+            const skuMapsOn = (recipe.maps || []).some((m) => m.role === 'line' && (skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample))));
             (recipe.headerFields || []).forEach((f) => {
               const col = this.recipeCol(headerTable, f.columnId);
               if (packedColEarly && col && col.id === packedColEarly.id) return;
+              if (skuMapsOn && qtyLikeColumn(col)) return;
               const raw = f.fill === 'fixed' ? f.fixed : recipeFieldValue(doc.text, f);
               const val = coerceRecipeCell(this.store, col, f, raw);
               if (this.recipeWriteCell(headerTable, rec, col, val)) filled += 1;
             });
             Object.keys(click.header).forEach((colId) => {
               const col = this.recipeCol(headerTable, colId);
-              if (packedColEarly && col && col.id === packedColEarly.id) return;
               const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role !== 'line');
+              if (packedColEarly && col && col.id === packedColEarly.id) return;
+              if (skuMapsOn && (qtyLikeColumn(col) || isQtyLikeMap(map))) return;
               const raw = click.header[colId];
               const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
               if (this.recipeWriteCell(headerTable, rec, col, val)) filled += 1;
@@ -8277,9 +8378,12 @@
               }
             };
             if (lineOnHeader && productRows.length) {
+              const lineColIds = {};
+              lineMaps.forEach((m) => { if (m && m.columnId) lineColIds[m.columnId] = true; });
               const copyCols = (headerTable.columns || []).filter((c) => {
                 if (c.type === 'autonumber' || c.type === 'formula' || c.type === 'rollup' || c.type === 'lookup' || c.type === 'attachment') return false;
                 if (packedCol && c.id === packedCol.id) return false;
+                if (lineColIds[c.id] || qtyLikeColumn(c) || isQtyLikeMap({ columnId: c.id, sample: '' })) return false;
                 return true;
               });
               productRows.forEach((row, i) => {
@@ -8594,11 +8698,14 @@
           if (got.lines[0].col_l_qty !== 192) console.warn('Rema qty extract failed', got.lines[0]);
           if (got.lines[0].col_l_price !== 73.5) console.warn('Rema price extract failed', got.lines[0]);
           if (String(got.lines[0].col_l_notes) === '379015') console.warn('crate line was kept');
-          const multiTxt = '306810 Ærter Danske 500gr. 360 Ks. 115,00 41.400,00\n379015 Europool kasse - grønt 360 Kolli 28,75 10.350,00\n306806 Sugar Snaps, DK 1344 Ks. 73,50 98.784,00\n379015 Europool kasse - grønt 1344 Kolli 28,75 38.640,00\n306805 Ærter Løse, DK 720 Ks. 114,00 82.080,00\n379015 Europool kasse - grønt 720 Kolli 28,75 20.700,00';
+          const multiTxt = '306810 Ærter Danske 500gr. 360 Ks. 115,00 41.400,00\n379015 Europool kasse - grønt 360 Kolli 28,75 10.350,00\n306806 Sugar Snaps, DK 1.344 Ks. 73,50 98.784,00\n379015 Europool kasse - grønt 1.344 Kolli 28,75 38.640,00\n306805 Ærter Løse, DK 720 Ks. 114,00 82.080,00\n379015 Europool kasse - grønt 720 Kolli 28,75 20.700,00';
           const multi = runRecipeExtract(multiTxt, remR);
           if (multi.lines.length !== 3) console.warn('KO421268-style lines should be 3 products, not crates', multi.lines);
           const nos = multi.lines.map((row) => String(row.col_l_notes));
           if (nos.join(',') !== '306810,306806,306805') console.warn('product numbers order failed', nos);
+          const qtys = multi.lines.map((row) => Number(row.col_l_qty));
+          if (qtys.join(',') !== '360,1344,720') console.warn('each packed product must keep its own box count', qtys, multi.lines);
+          if (parseDkNumber('1.344') !== 1344) console.warn('Danish thousands 1.344 should be 1344', parseDkNumber('1.344'));
           const dupTxt = multiTxt + '\n306810 Ærter Danske 500gr. 360 Ks. 115,00 41.400,00';
           const deduped = runRecipeExtract(dupTxt, remR);
           if (deduped.lines.length !== 3) console.warn('unique product numbers should not duplicate', deduped.lines);
@@ -8625,6 +8732,30 @@
           });
           if (clickLines.lines.length !== 3 || clickLines.lines.some((r) => String(r.sku).slice(-2) === '15')) console.warn('click map should keep 3 products, skip crate and 1.344 qty', clickLines.lines);
           if (clickLines.lines.map((r) => String(r.sku)).join(',') !== '306810,306806,306805') console.warn('product sku order failed', clickLines.lines);
+          if (clickLines.lines.map((r) => Number(r.qty)).join(',') !== '360,1344,720') console.warn('click map qty must follow each packed product', clickLines.lines);
+          const headerQty = extractFromMaps([{ num: 1, items: [
+            { str: '306810', nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02 },
+            { str: '360', nx: 0.4, ny: 0.20, nw: 0.05, nh: 0.02 },
+            { str: 'Ks.', nx: 0.46, ny: 0.20, nw: 0.03, nh: 0.02 },
+            { str: '379015', nx: 0.1, ny: 0.26, nw: 0.08, nh: 0.02 },
+            { str: 'Europool kasse', nx: 0.22, ny: 0.26, nw: 0.12, nh: 0.02 },
+            { str: '360', nx: 0.4, ny: 0.26, nw: 0.05, nh: 0.02 },
+            { str: '306806', nx: 0.1, ny: 0.32, nw: 0.08, nh: 0.02 },
+            { str: '1', nx: 0.38, ny: 0.32, nw: 0.02, nh: 0.02 },
+            { str: '.', nx: 0.40, ny: 0.32, nw: 0.01, nh: 0.02 },
+            { str: '344', nx: 0.41, ny: 0.32, nw: 0.04, nh: 0.02 },
+            { str: 'Ks.', nx: 0.46, ny: 0.32, nw: 0.03, nh: 0.02 },
+            { str: '306805', nx: 0.1, ny: 0.44, nw: 0.08, nh: 0.02 },
+            { str: '720', nx: 0.4, ny: 0.44, nw: 0.05, nh: 0.02 },
+            { str: 'Ks.', nx: 0.46, ny: 0.44, nw: 0.03, nh: 0.02 }
+          ] }], {
+            maps: [
+              { role: 'line', columnId: 'sku', page: 1, nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02, sample: '306810', transform: 'text' },
+              { role: 'header', columnId: 'qty', page: 1, nx: 0.4, ny: 0.20, nw: 0.05, nh: 0.02, sample: '360', transform: 'number' }
+            ]
+          });
+          if (headerQty.header.qty != null) console.warn('qty taught once must not stay a header copy', headerQty.header);
+          if (headerQty.lines.map((r) => Number(r.qty)).join(',') !== '360,1344,720') console.warn('header-taught qty must still bind to each packed product', headerQty.lines);
           const mapCols = recipeMapTargetColumns({ tables: [
             { id: 'tbl_oh', name: 'Order Handling', columns: [{ id: 'col_pack', name: 'Packed Product' }] },
             { id: 'tbl_lines', name: 'Line Items', columns: [{ id: 'col_l_itemno', name: 'Item No' }] }
