@@ -979,6 +979,7 @@
                   <option value="">—</option>
                   <option v-for="c in recipeHeaderColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
                 </select>
+                <span class="block text-[11px] text-mute mt-1">Putting a PDF in that column on a row detects this recipe and fills the other cells.</span>
               </label>
             </div>
             <div>
@@ -5401,6 +5402,9 @@
           }
           if (payload.record && payload.record.fx) delete payload.record.fx[payload.column.id];
           this.setCell(payload.record, payload.column, v);
+          if (payload.column && payload.column.type === 'attachment' && isAttachMeta(v) && payload.record) {
+            this.$nextTick(() => this.fillRowFromAttach(payload.record, payload.column));
+          }
         },
         applyCellRule(rec, col, spec, dR, dC, quiet) {
           if (!rec || !col || rec.locked) return false;
@@ -6610,6 +6614,58 @@
           }
           this.recipeBusy = false;
         },
+        recipeForAttach(col, text) {
+          const tableId = this.currentTableId;
+          const list = (this.store.recipes || []).filter((r) => !r.headerTableId || r.headerTableId === tableId);
+          const onCol = list.filter((r) => !r.attachColumnId || r.attachColumnId === col.id);
+          const pool = onCol.length ? onCol : list;
+          const hit = detectRecipe(pool, text);
+          if (hit) return hit;
+          if (pool.length === 1) return pool[0];
+          return pool.find((r) => r.attachColumnId === col.id) || null;
+        },
+        async fillRowFromAttach(rec, col) {
+          if (!rec || !col || rec.locked) return;
+          const meta = isAttachMeta(rawStored(rec, col)) ? rawStored(rec, col) : null;
+          if (!meta) return;
+          await loadAttachUrl(meta);
+          const hit = attachmentBlobs.get(meta.id);
+          const blob = hit && hit.blob;
+          if (!blob) return;
+          const kind = kindOf({ name: meta.name, type: meta.type });
+          if (kind !== 'pdf' && kind !== 'text') {
+            this.toast('File attached. Recipes fill from PDFs or text files.');
+            return;
+          }
+          const url = hit.url || URL.createObjectURL(blob);
+          const doc = { id: 'att-' + meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: '', file: blob };
+          this.recipeBusy = true;
+          this.recipeHint = 'Reading attached file…';
+          try {
+            doc.text = await this.readDocText(doc);
+            const recipe = this.recipeForAttach(col, doc.text);
+            if (!recipe) {
+              this.recipeHint = 'File attached. No matching recipe — pick one in Docs and Fill sheet, or set detect text on a recipe.';
+              this.toast('Attached ' + meta.name + '. No recipe matched, so other cells were left as they are.');
+              this.recipeBusy = false;
+              return;
+            }
+            this.selectedRecipeId = recipe.id;
+            const existing = this.docs.find((d) => d.attachId === meta.id);
+            if (existing) {
+              existing.url = url; existing.text = doc.text; existing.file = blob; existing.kind = kind;
+              this.activeDocId = existing.id;
+              doc.id = existing.id;
+            } else {
+              this.docs.push(Object.assign({}, doc, { attachId: meta.id }));
+              this.activeDocId = doc.id;
+            }
+            await this.applyRecipeFill(recipe, doc, rec, { skipAttach: true, replaceLines: true, keepView: true });
+          } catch (e) {
+            this.toast('Could not read the attached file for a recipe.', 'error');
+            this.recipeBusy = false;
+          }
+        },
         async runRecipeOnDoc() {
           const recipe = this.store.recipes.find((r) => r.id === this.selectedRecipeId);
           const doc = this.activeDoc;
@@ -6617,10 +6673,6 @@
           this.recipeBusy = true;
           this.recipeHint = 'Reading ' + recipe.name + '…';
           try {
-            if (!doc.text) doc.text = await this.readDocText(doc);
-            if (doc.kind === 'pdf' && (!this.pdfView.pages.length || this.pdfView.src !== doc.url)) await this.loadPdfView(doc);
-            const extracted = runRecipeExtract(doc.text, recipe);
-            const click = (recipe.maps || []).length && this.pdfView.pages.length ? extractFromMaps(this.pdfView.pages, recipe) : { header: {}, lines: [] };
             const headerTable = findTable(this.store, recipe.headerTableId) || this.currentTable;
             if (!headerTable) {
               this.toast('Pick a header sheet on the recipe.', 'warn');
@@ -6629,6 +6681,26 @@
             }
             const rec = this.blankRecord(headerTable);
             headerTable.records.push(rec);
+            await this.applyRecipeFill(recipe, doc, rec, {});
+          } catch (e) {
+            this.recipeHint = 'Could not apply this recipe to the file.';
+            this.toast('Recipe fill failed. Try Test on open PDF in Recipes.', 'error');
+            this.recipeBusy = false;
+          }
+        },
+        async applyRecipeFill(recipe, doc, rec, opts) {
+          opts = opts || {};
+          try {
+            if (!doc.text) doc.text = await this.readDocText(doc);
+            if (doc.kind === 'pdf' && (!this.pdfView.pages.length || this.pdfView.src !== doc.url)) await this.loadPdfView(doc);
+            const extracted = runRecipeExtract(doc.text, recipe);
+            const click = (recipe.maps || []).length && this.pdfView.pages.length ? extractFromMaps(this.pdfView.pages, recipe) : { header: {}, lines: [] };
+            const headerTable = findTable(this.store, recipe.headerTableId) || this.currentTable;
+            if (!headerTable || !rec) {
+              this.toast('Pick a header sheet on the recipe.', 'warn');
+              this.recipeBusy = false;
+              return;
+            }
             (recipe.headerFields || []).forEach((f) => {
               const col = findColumn(headerTable, f.columnId);
               const raw = f.fill === 'fixed' ? f.fixed : recipeFieldValue(doc.text, f);
@@ -6654,7 +6726,7 @@
                 if (hit) this.setCell(rec, cc, hit.id, true, headerTable);
               }
             }
-            if (recipe.attachColumnId && doc.file) {
+            if (!opts.skipAttach && recipe.attachColumnId && doc.file) {
               const ac = findColumn(headerTable, recipe.attachColumnId);
               if (ac && ac.type === 'attachment') {
                 const meta = await fileToAttachMeta(doc.file);
@@ -6662,6 +6734,10 @@
               }
             }
             const lineTable = findTable(this.store, recipe.lineTableId);
+            if (lineTable && opts.replaceLines && recipe.lineLinkColumnId) {
+              const lc = findColumn(lineTable, recipe.lineLinkColumnId);
+              if (lc) lineTable.records = lineTable.records.filter((r) => rawStored(r, lc) !== rec.id);
+            }
             if (lineTable && click.lines.length) {
               click.lines.forEach((row) => {
                 const lr = this.blankRecord(lineTable);
@@ -6700,11 +6776,12 @@
             this.selectedRecordId = rec.id;
             const first = headerTable.columns[0];
             if (first) this.applySelection({ recId: rec.id, colId: first.id }, { recId: rec.id, colId: first.id });
-            this.view = this.splitOpen ? 'form' : 'grid';
+            if (!opts.keepView) this.view = this.splitOpen ? 'form' : 'grid';
+            this.$nextTick(() => this.refreshSheetValues());
             const n = (click.lines.length || extracted.lines.length);
             this.recipeHint = 'Filled from ' + recipe.name + (n ? ' · ' + n + ' line' + (n === 1 ? '' : 's') : '') + '. Check the row, then edit anything the PDF read poorly.';
             this.audit('recipe.apply', recipe.name, doc.name);
-            this.toast('Filled a ' + headerTable.name + ' row from ' + recipe.name + '.');
+            this.toast((opts.skipAttach ? 'Filled this row from ' : 'Filled a ' + headerTable.name + ' row from ') + recipe.name + '.');
           } catch (e) {
             this.recipeHint = 'Could not apply this recipe to the file.';
             this.toast('Recipe fill failed. Try Test on open PDF in Recipes.', 'error');
