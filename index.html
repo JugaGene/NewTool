@@ -129,11 +129,11 @@
     .forge-sheet .jexcel > tbody > tr > td .sheet-attach { min-height: 32px; }
     .forge-sheet .jexcel_toolbar, .forge-sheet .jexcel_pagination, .forge-sheet .jexcel_filter { display: none !important; }
     .jexcel_contextmenu, .jcontextmenu { background: #10192c !important; border: 1px solid #2a3b5c !important; color: #d7e0f2 !important; }
-    .pdf-page { position: relative; background: #fff; }
+    .pdf-page { position: relative; background: #fff; overflow: hidden; isolation: isolate; }
     .pdf-page canvas { display: block; width: 100%; height: auto; }
-    .pdf-hits { position: absolute; inset: 0; }
-    .pdf-hit { position: absolute; border: 1px solid transparent; background: transparent; padding: 0; }
-    .pdf-teach .pdf-hit { cursor: pointer; }
+    .pdf-hits { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
+    .pdf-hit { position: absolute; border: 1px solid transparent; background: transparent; padding: 0; pointer-events: none; }
+    .pdf-teach .pdf-hit { cursor: pointer; pointer-events: auto; }
     .pdf-teach .pdf-hit:hover { background: rgba(245, 185, 66, 0.35); outline: 1px solid #f5b942; }
     .pdf-hit.mapped { outline: 1px solid #3ecfbe; background: rgba(62, 207, 190, 0.2); }
     .pdf-hit.pick { cursor: pointer; }
@@ -203,7 +203,7 @@
     <!-- App shell -->
     <div v-else class="h-full flex flex-col bg-ink-900">
       <!-- Header -->
-      <header class="h-14 shrink-0 border-b border-line bg-ink-850 flex items-center gap-3 px-3 md:px-4">
+      <header class="h-14 shrink-0 border-b border-line bg-ink-850 flex items-center gap-3 px-3 md:px-4 relative z-30">
         <button v-if="!panelMode" class="rounded-md p-2 hover:bg-ink-700" @click="toggleWorkspacePanel" :title="workspacePanelOpen ? 'Hide workspace' : 'Show workspace'">
           <icon name="panel" size="16"></icon>
         </button>
@@ -260,7 +260,7 @@
       <div v-if="mode==='architect' && !recipeTeach.active" class="shrink-0 bg-gold text-ink-900 text-[12px] font-semibold px-4 py-1">
         Architect Mode is unlocked — categories, sheets, lookups, formulas, and client recipes can be changed. Switch back to Operator Mode before handing this screen to data-entry staff.
       </div>
-      <div v-if="recipeTeach.active" class="shrink-0 bg-gold text-ink-900 px-3 py-2 text-[13px] flex flex-wrap items-center gap-2">
+      <div v-if="recipeTeach.active" class="shrink-0 bg-gold text-ink-900 px-3 py-2 text-[13px] flex flex-wrap items-center gap-2 relative z-30">
         <span class="font-semibold">Teaching {{ (recipeDraft && recipeDraft.name) || 'recipe' }}</span>
         <label class="inline-flex items-center gap-1 text-[12px]">Column
           <select v-model="recipeTeach.colId" class="rounded-md bg-ink-900 text-mist px-2 py-1" @change="onTeachColChange">
@@ -402,10 +402,10 @@
               <p class="text-xs text-mute mt-1 max-w-xs">Use Open file above, or drop a PDF here. To teach a recipe, open the PDF first, then Recipes → Teach on PDF, pick a column, and click the value on the page.</p>
             </div>
             <div v-else class="h-full rounded-xl border border-line bg-ink-950 overflow-hidden relative" :class="recipeTeach.active && 'pdf-teach'">
-              <div v-if="activeDoc.kind==='pdf'" class="h-full overflow-auto bg-white">
+              <div v-if="activeDoc.kind==='pdf'" ref="pdfScroll" class="h-full overflow-auto bg-white">
                 <div v-if="!pdfView.pages.length" class="h-full grid place-items-center text-ink-900 text-sm">Reading PDF…</div>
                 <div v-for="page in pdfView.pages" :key="page.num" class="pdf-page mx-auto">
-                  <canvas :id="'pdf-canvas-' + page.num" :width="page.width" :height="page.height"></canvas>
+                  <canvas :data-pdf-page="page.num" :width="page.width" :height="page.height"></canvas>
                   <div class="pdf-hits">
                     <button v-for="(it, i) in page.items" :key="i" type="button" class="pdf-hit"
                       :class="pdfHitClass(page, it)"
@@ -419,7 +419,7 @@
                 <img :src="activeDoc.url" :alt="activeDoc.name" class="max-w-full" :style="{ transform: 'scale(' + imgZoom + ')', transformOrigin: 'top center' }" />
               </div>
               <pre v-else class="h-full overflow-auto p-4 text-[12px] font-mono leading-relaxed whitespace-pre-wrap">{{ activeDoc.text }}</pre>
-              <div class="absolute bottom-2 right-2 flex gap-1">
+              <div class="absolute bottom-2 right-2 flex gap-1 z-10">
                 <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="openDocReader">Read large</button>
                 <template v-if="activeDoc.kind==='image'">
                   <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="imgZoom=Math.max(.4, imgZoom-.1)">−</button>
@@ -1331,7 +1331,8 @@
     const STORAGE_KEY = 'forgegrid.workspace.v1';
     const UNDOCK_CH = 'forgegrid.panels.v1';
     const UNDOCK_SESSION = 'forgegrid.undocked.v1';
-    const { createApp } = window.Vue || {};
+    const { createApp, markRaw } = window.Vue || {};
+    const asRaw = typeof markRaw === 'function' ? markRaw : function (v) { return v; };
 
     const COLUMN_TYPES = [
       { id: 'text', label: 'Text' },
@@ -2750,16 +2751,40 @@
       return 'text';
     }
 
+    function clipUnit(n, fallback) {
+      const x = Number(n);
+      if (!Number.isFinite(x)) return fallback;
+      return Math.max(0, Math.min(1, x));
+    }
+
+    function sanitizePdfItem(it) {
+      const nx = clipUnit(it.nx, 0);
+      const ny = clipUnit(it.ny, 0);
+      let nw = clipUnit(it.nw, 0.008);
+      let nh = clipUnit(it.nh, 0.01);
+      if (nx + nw > 1) nw = Math.max(0.002, 1 - nx);
+      if (ny + nh > 1) nh = Math.max(0.003, 1 - ny);
+      return { str: String(it.str || ''), nx, ny, nw, nh };
+    }
+
     function pdfItemRect(item, viewport) {
-      const x = item.transform[4];
-      const y = item.transform[5];
+      const tr = item.transform || [1, 0, 0, 1, 0, 0];
+      const x = tr[4] || 0;
+      const y = tr[5] || 0;
       const w = item.width || 0;
-      const h = item.height || Math.abs(item.transform[3]) || Math.abs(item.transform[0]) || 8;
+      const h = item.height || Math.abs(tr[3]) || Math.abs(tr[0]) || 8;
       const a = viewport.convertToViewportPoint(x, y);
       const b = viewport.convertToViewportPoint(x + w, y + h);
       const left = Math.min(a[0], b[0]);
       const top = Math.min(a[1], b[1]);
-      return { x: left, y: top, w: Math.max(Math.abs(b[0] - a[0]), 3), h: Math.max(Math.abs(b[1] - a[1]), 6) };
+      const vw = viewport.width || 1;
+      const vh = viewport.height || 1;
+      return {
+        x: Math.max(0, Math.min(left, vw)),
+        y: Math.max(0, Math.min(top, vh)),
+        w: Math.max(Math.min(Math.abs(b[0] - a[0]), vw), 3),
+        h: Math.max(Math.min(Math.abs(b[1] - a[1]), vh), 6)
+      };
     }
 
     function explodePdfWords(items) {
@@ -2769,7 +2794,7 @@
         const parts = raw.split(/(\s+)/);
         const words = parts.filter((p) => p && !/^\s+$/.test(p));
         if (words.length <= 1) {
-          if (raw.trim()) out.push(it);
+          if (raw.trim()) out.push(sanitizePdfItem(it));
           return;
         }
         let acc = 0;
@@ -2778,19 +2803,18 @@
           if (!p) return;
           const frac = p.length / total;
           if (p.trim()) {
-            out.push({
+            out.push(sanitizePdfItem({
               str: p.trim(),
               nx: it.nx + acc * it.nw,
               ny: it.ny,
               nw: Math.max(frac * it.nw, 0.004),
               nh: it.nh
-            });
+            }));
           }
           acc += frac;
         });
       });
-      out.sort((a, b) => (b.nw * b.nh) - (a.nw * a.nh));
-      return out;
+      return out.filter((it) => it.nw < 0.92 || it.nh < 0.45);
     }
 
     function leftLabelFor(items, hit) {
@@ -6485,7 +6509,7 @@
         async addFile(file) {
           const kind = kindOf(file);
           const url = URL.createObjectURL(file);
-          const doc = { id: uid('doc'), name: file.name, size: file.size, type: file.type, kind, url, text: '', file };
+          const doc = { id: uid('doc'), name: file.name, size: file.size, type: file.type, kind, url, text: '', file: asRaw(file) };
           if (kind === 'text') doc.text = await file.text();
           this.docs.push(doc);
           this.activeDocId = doc.id;
@@ -6508,12 +6532,30 @@
           if (doc.kind === 'image') return '';
           return doc.text || '';
         },
+        async getPdfDocument(url) {
+          if (!url || !window.pdfjsLib) throw new Error('pdf.js missing');
+          if (this._pdfDocUrl === url && this._pdfDoc) return this._pdfDoc;
+          if (this._pdfDocUrl === url && this._pdfDocPromise) return this._pdfDocPromise;
+          if (this._pdfLoadingTask && this._pdfDocUrl !== url) {
+            try { this._pdfLoadingTask.destroy(); } catch (e) { /* ignore */ }
+            this._pdfLoadingTask = null;
+            this._pdfDoc = null;
+            this._pdfDocPromise = null;
+          }
+          this._pdfDocUrl = url;
+          this._pdfLoadingTask = window.pdfjsLib.getDocument({ url, withCredentials: false });
+          this._pdfDocPromise = this._pdfLoadingTask.promise.then((pdf) => {
+            this._pdfDoc = asRaw(pdf);
+            return this._pdfDoc;
+          });
+          return this._pdfDocPromise;
+        },
         async extractPdfText(url) {
           if (!window.pdfjsLib) throw new Error('pdf.js missing');
-          const pdf = await window.pdfjsLib.getDocument({ url, withCredentials: false }).promise;
+          const pdf = await this.getPdfDocument(url);
           const parts = [];
           for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
+            const page = asRaw(await pdf.getPage(i));
             const content = await page.getTextContent();
             let line = '';
             let lastY = null;
@@ -6718,43 +6760,70 @@
           this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
           this.toast('Mapped ' + sample + ' → column.');
         },
+        cancelPdfRenders() {
+          const tasks = this._pdfRenderTasks || [];
+          tasks.forEach((t) => { try { t.cancel(); } catch (e) { /* ignore */ } });
+          this._pdfRenderTasks = [];
+        },
+        async paintPdfPages(token) {
+          await this.$nextTick();
+          if (token !== this._pdfLoad) return;
+          const root = this.$refs.pdfScroll;
+          const gfx = this._pdfGfx || {};
+          const pages = (this.pdfView && this.pdfView.pages) || [];
+          this.cancelPdfRenders();
+          for (let i = 0; i < pages.length; i++) {
+            if (token !== this._pdfLoad) return;
+            const pg = pages[i];
+            const raw = gfx[pg.num];
+            if (!raw || !root) continue;
+            const canvas = root.querySelector('[data-pdf-page="' + pg.num + '"]');
+            if (!canvas) continue;
+            const ctx = canvas.getContext('2d');
+            try {
+              const task = raw.page.render({ canvasContext: ctx, viewport: raw.viewport });
+              this._pdfRenderTasks.push(task);
+              await task.promise;
+            } catch (e) {
+              if (e && e.name === 'RenderingCancelledException') return;
+            }
+          }
+        },
         async loadPdfView(doc) {
           if (!doc || !doc.url || !window.pdfjsLib) return;
           if (this.pdfView.src === doc.url && this.pdfView.pages.length) return;
           this._pdfLoad = (this._pdfLoad || 0) + 1;
           const token = this._pdfLoad;
+          this.cancelPdfRenders();
           this.pdfView = { pages: [], src: doc.url };
           try {
-            const pdf = await window.pdfjsLib.getDocument({ url: doc.url, withCredentials: false }).promise;
+            const pdf = await this.getPdfDocument(doc.url);
+            if (token !== this._pdfLoad) return;
             const pages = [];
+            const gfx = {};
             for (let p = 1; p <= pdf.numPages; p++) {
-              const page = await pdf.getPage(p);
-              const viewport = page.getViewport({ scale: 1.35 });
+              const page = asRaw(await pdf.getPage(p));
+              const viewport = asRaw(page.getViewport({ scale: 1.35 }));
               const content = await page.getTextContent();
               const items = explodePdfWords(content.items.filter((it) => it.str && String(it.str).trim()).map((it) => {
                 const r = pdfItemRect(it, viewport);
-                return {
+                return sanitizePdfItem({
                   str: it.str,
                   nx: r.x / viewport.width,
                   ny: r.y / viewport.height,
                   nw: r.w / viewport.width,
                   nh: r.h / viewport.height
-                };
+                });
               }));
-              pages.push({ num: p, width: viewport.width, height: viewport.height, items, viewport, page });
+              gfx[p] = asRaw({ page, viewport });
+              pages.push({ num: p, width: viewport.width, height: viewport.height, items });
             }
             if (token !== this._pdfLoad) return;
+            this._pdfGfx = gfx;
             this.pdfView = { pages, src: doc.url };
-            await this.$nextTick();
-            if (token !== this._pdfLoad) return;
-            for (let i = 0; i < pages.length; i++) {
-              const pg = pages[i];
-              const canvas = document.getElementById('pdf-canvas-' + pg.num);
-              if (!canvas) continue;
-              const ctx = canvas.getContext('2d');
-              await pg.page.render({ canvasContext: ctx, viewport: pg.viewport }).promise;
-            }
+            await this.paintPdfPages(token);
           } catch (e) {
+            if (token !== this._pdfLoad) return;
             this.recipeHint = 'Could not render this PDF for clicking.';
           }
         },
