@@ -2892,6 +2892,39 @@
       return /^\d{5,8}$/.test(t);
     }
 
+    function compactSkuDigits(s) {
+      return String(s == null ? '' : s).replace(/\D/g, '');
+    }
+
+    function skuBlockedByHeader(header, sku) {
+      const compact = compactSkuDigits(sku);
+      if (!compact || compact.length < 5) return false;
+      return Object.keys(header || {}).some((k) => {
+        const h = header[k];
+        const raw = h && typeof h === 'object' && 'value' in h ? h.value : h;
+        const hd = compactSkuDigits(raw);
+        if (!hd) return false;
+        return hd === compact || hd.indexOf(compact) >= 0 || compact.indexOf(hd) >= 0;
+      });
+    }
+
+    function densestSkuHits(hits, gap) {
+      const list = (hits || []).slice().sort((a, b) => ((a.ny + a.nh / 2) - (b.ny + b.nh / 2)));
+      if (list.length <= 1) return list;
+      const g = gap == null ? 0.14 : gap;
+      const groups = [];
+      list.forEach((it) => {
+        const y = it.ny + it.nh / 2;
+        const last = groups[groups.length - 1];
+        if (last && y - last.yLast < g) {
+          last.items.push(it);
+          last.yLast = y;
+        } else groups.push({ items: [it], yLast: y });
+      });
+      groups.sort((a, b) => b.items.length - a.items.length);
+      return groups[0].items;
+    }
+
     function recipeMapTargetColumns(store, recipe, map, currentTable) {
       const seen = {};
       const out = [];
@@ -3075,6 +3108,26 @@
       return (table.columns || []).find((c) => /packed\s*product/i.test(c.name || ''))
         || (table.columns || []).find((c) => /^product$/i.test(c.name || '') && isLinkCol(c))
         || null;
+    }
+
+    function siblingOrderRecords(table, rec) {
+      if (!table || !rec) return [];
+      const refCol = (table.columns || []).find((c) => /customer\s*ref|kunde\s*ref|^po$|ordre/i.test(c.name || '') && !/delivery|packing|date/i.test(c.name || ''));
+      const attCol = (table.columns || []).find((c) => c.type === 'attachment');
+      const ref = refCol ? String(rawStored(rec, refCol) || '').trim() : '';
+      const att = attCol ? rawStored(rec, attCol) : null;
+      const attId = isAttachMeta(att) ? att.id : '';
+      const attName = isAttachMeta(att) ? String(att.name || '') : '';
+      return (table.records || []).filter((r) => {
+        if (!r || r.id === rec.id) return false;
+        if (ref && refCol && String(rawStored(r, refCol) || '').trim() === ref) return true;
+        if (attCol) {
+          const a = rawStored(r, attCol);
+          if (attId && isAttachMeta(a) && a.id === attId) return true;
+          if (attName && isAttachMeta(a) && a.name === attName) return true;
+        }
+        return false;
+      });
     }
 
     function skuValueFromLineRow(row) {
@@ -3452,6 +3505,8 @@
         const skuAnchor = skuLikeSample(sample) || (m0.choices || []).some((c) => skuLikeSample(c.sample));
         let hits = items.filter((it) => Math.abs((it.nx + it.nw / 2) - cx0) < 0.08 && String(it.str).trim());
         if (skuAnchor) hits = hits.filter((it) => skuLikeSample(it.str));
+        hits = hits.filter((it) => !skuBlockedByHeader(header, it.str));
+        if (skuAnchor && hits.length > 1) hits = densestSkuHits(hits);
         const clusters = [];
         hits.map((it) => it.ny + it.nh / 2).sort((a, b) => a - b).forEach((y) => {
           const last = clusters[clusters.length - 1];
@@ -3478,6 +3533,7 @@
           if (extras.some((s) => /europool|kasse|kolli|emballage/i.test(String(s || '')))) return;
           const sku = skuValueFromLineRow(row);
           if (sku && /15$/.test(String(sku).replace(/\s/g, ''))) return;
+          if (skuBlockedByHeader(header, sku)) return;
           lines.push(row);
         });
       }
@@ -8057,14 +8113,17 @@
               return;
             }
             let filled = 0;
+            const packedColEarly = packedProductColumn(headerTable);
             (recipe.headerFields || []).forEach((f) => {
               const col = this.recipeCol(headerTable, f.columnId);
+              if (packedColEarly && col && col.id === packedColEarly.id) return;
               const raw = f.fill === 'fixed' ? f.fixed : recipeFieldValue(doc.text, f);
               const val = coerceRecipeCell(this.store, col, f, raw);
               if (this.recipeWriteCell(headerTable, rec, col, val)) filled += 1;
             });
             Object.keys(click.header).forEach((colId) => {
               const col = this.recipeCol(headerTable, colId);
+              if (packedColEarly && col && col.id === packedColEarly.id) return;
               const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role !== 'line');
               const raw = click.header[colId];
               const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
@@ -8097,11 +8156,23 @@
             }
             ensureRecipeLineTable(this.store, recipe);
             const lineTable = findTable(this.store, recipe.lineTableId);
-            const productRows = (click.lines && click.lines.length) ? click.lines : extracted.lines;
-            const packedCol = packedProductColumn(headerTable);
+            let productRows = (click.lines && click.lines.length) ? click.lines : extracted.lines;
+            productRows = (productRows || []).filter((row) => {
+              const sku = skuValueFromLineRow(row);
+              if (skuBlockedByHeader(click.header, sku) || skuBlockedByHeader(extracted.header, sku)) return false;
+              if (sku && /15$/.test(String(sku).replace(/\s/g, ''))) return false;
+              return true;
+            });
+            const packedCol = packedColEarly || packedProductColumn(headerTable);
             const lineMaps = (recipe.maps || []).filter((m) => m.role === 'line');
             const lineOnHeader = !!(packedCol || lineMaps.some((m) => findColumn(headerTable, m.columnId)));
             const separateLines = !!(lineTable && lineTable.id !== headerTable.id && lineMaps.some((m) => findColumn(lineTable, m.columnId)));
+            if (lineOnHeader && opts.replaceLines !== false) {
+              siblingOrderRecords(headerTable, rec).forEach((r) => {
+                headerTable.records = headerTable.records.filter((x) => x.id !== r.id);
+              });
+              if (packedCol) this.setCell(rec, packedCol, '', true, headerTable);
+            }
             const writeProductOnto = (table, target, row) => {
               Object.keys(row || {}).forEach((colId) => {
                 const col = this.recipeCol(table, colId);
@@ -8138,7 +8209,7 @@
             };
             if (lineOnHeader && productRows.length) {
               const copyCols = (headerTable.columns || []).filter((c) => {
-                if (c.type === 'autonumber' || c.type === 'formula' || c.type === 'rollup' || c.type === 'lookup') return false;
+                if (c.type === 'autonumber' || c.type === 'formula' || c.type === 'rollup' || c.type === 'lookup' || c.type === 'attachment') return false;
                 if (packedCol && c.id === packedCol.id) return false;
                 return true;
               });
@@ -8504,6 +8575,33 @@
             }]
           });
           if (taughtExtra.lines.length !== 3 || taughtExtra.lines.some((r) => String(r.sku) === '9880810')) console.warn('taught SKU from another PDF must not add an extra line', taughtExtra.lines);
+          const headerSku = extractFromMaps([{ num: 1, items: [
+            { str: 'KO421268', nx: 0.1, ny: 0.04, nw: 0.12, nh: 0.02 },
+            { str: '421268', nx: 0.1, ny: 0.06, nw: 0.08, nh: 0.02 },
+            { str: '306810', nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02 },
+            { str: '306806', nx: 0.1, ny: 0.32, nw: 0.08, nh: 0.02 },
+            { str: '306805', nx: 0.1, ny: 0.44, nw: 0.08, nh: 0.02 }
+          ] }], {
+            maps: [
+              { role: 'header', columnId: 'ref', page: 1, nx: 0.1, ny: 0.04, nw: 0.12, nh: 0.02, sample: 'KO421268', transform: 'text' },
+              { role: 'line', columnId: 'sku', page: 1, nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02, sample: '306810', transform: 'text' }
+            ]
+          });
+          if (headerSku.lines.length !== 3 || headerSku.lines.some((r) => String(r.sku) === '421268')) console.warn('order number 421268 must not become an extra product line', headerSku.lines);
+          const sibTable = {
+            columns: [
+              { id: 'ref', name: 'Customer Ref', type: 'text' },
+              { id: 'att', name: 'Attachment', type: 'attachment' },
+              { id: 'pack', name: 'Packed Product', type: 'text' }
+            ],
+            records: [
+              { id: 'keep', data: { ref: 'KO421268', att: { id: 'a1', name: 'po.pdf' } } },
+              { id: 'dup', data: { ref: 'KO421268', att: { id: 'a1', name: 'po.pdf' } } },
+              { id: 'other', data: { ref: '1220391355', att: { id: 'a2', name: 'other.pdf' } } }
+            ]
+          };
+          const sibs = siblingOrderRecords(sibTable, sibTable.records[0]);
+          if (sibs.length !== 1 || sibs[0].id !== 'dup') console.warn('reattach should replace same-order rows only', sibs);
           const lkWs = sampleWorkspace('Lookup');
           const custF = remR.headerFields.find((f) => f.fill === 'lookup');
           if (resolveRecipeFill(lkWs, custF, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('customer lookup failed');
