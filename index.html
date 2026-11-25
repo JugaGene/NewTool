@@ -3019,26 +3019,39 @@
     }
 
     function joinLineNumberTokens(items, y) {
-      const band = itemsOnPdfLine(items, y, 0.016).slice().sort((a, b) => a.nx - b.nx);
+      const band = itemsOnPdfLine(items, y, 0.01).slice().sort((a, b) => a.nx - b.nx);
       const merged = [];
       band.forEach((it) => {
         const last = merged[merged.length - 1];
         const gap = last ? it.nx - (last.nx + last.nw) : 99;
         const a = String((last && last.str) || '');
         const b = String(it.str || '');
-        if (last && gap < 0.012 && /[\d.]$/.test(a) && /^[\d.]/.test(b)) {
-          last.str = a + b;
+        const glued = a + b;
+        const thousand = /^\d{1,3}(\.\d{3})+$/.test(glued.replace(/[\s\u00a0]/g, ''));
+        const leadingDot = /^\d{1,3}$/.test(a) && b === '.';
+        const continuesDot = /\d$/.test(a) && /^\.\d{3}$/.test(b);
+        const afterDot = /\d\.$/.test(a) && /^\d{3}$/.test(b);
+        if (last && gap < 0.01 && (leadingDot || continuesDot || afterDot || (thousand && /\./.test(glued)))) {
+          last.str = glued;
           last.nw = (it.nx + it.nw) - last.nx;
         } else merged.push({ str: b, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh });
       });
       return merged;
     }
 
+    function qtyBeforeUnit(s) {
+      const m = String(s || '').replace(/\u00a0/g, ' ').match(/(\d{1,3}(?:\s*\.\s*\d{3})+|\d{1,5})\s*(Ks\.?|Kolli|Kg|Stk)\b/i);
+      return m ? m[1].replace(/\s+/g, '') : '';
+    }
+
     function readQtyOnLine(items, map, y) {
       const cx = (map && map.nx != null) ? map.nx + (map.nw || 0) / 2 : 0.5;
       const merged = joinLineNumberTokens(items, y);
+      const lineText = merged.map((it) => it.str).join(' ');
+      const fromPhrase = qtyBeforeUnit(lineText) || merged.map((it) => qtyBeforeUnit(it.str)).filter(Boolean)[0];
+      if (fromPhrase) return fromPhrase;
       const qtyHits = merged.filter((it) => isQtyToken(it.str));
-      const units = merged.filter((it) => /^(ks\.?|kolli|kg|stk)$/i.test(String(it.str || '').trim()));
+      const units = merged.filter((it) => /\b(ks\.?|kolli|kg|stk)\b/i.test(String(it.str || '').trim()));
       if (units.length) {
         const u = units[0];
         const before = qtyHits.filter((it) => it.nx + it.nw <= u.nx + 0.02).sort((a, b) => b.nx - a.nx)[0];
@@ -3048,11 +3061,11 @@
       let bestD = 99;
       qtyHits.forEach((it) => {
         const dx = Math.abs((it.nx + it.nw / 2) - cx);
-        if (dx > 0.22) return;
+        if (dx > 0.08) return;
         if (dx < bestD) { bestD = dx; best = it; }
       });
       if (best) return best.str;
-      const near = nearestPdfItem(items, cx, y, 0.14, 0.02);
+      const near = nearestPdfItem(items, cx, y, 0.06, 0.012);
       return near && isQtyToken(near.str) ? near.str : '';
     }
 
@@ -8756,6 +8769,46 @@
           });
           if (headerQty.header.qty != null) console.warn('qty taught once must not stay a header copy', headerQty.header);
           if (headerQty.lines.map((r) => Number(r.qty)).join(',') !== '360,1344,720') console.warn('header-taught qty must still bind to each packed product', headerQty.lines);
+          const gluedQty = extractFromMaps([{ num: 1, items: [
+            { str: '306810', nx: 0.08, ny: 0.20, nw: 0.07, nh: 0.018 },
+            { str: '360', nx: 0.40, ny: 0.20, nw: 0.04, nh: 0.018 },
+            { str: 'Ks.', nx: 0.45, ny: 0.20, nw: 0.03, nh: 0.018 },
+            { str: '10', nx: 0.62, ny: 0.20, nw: 0.03, nh: 0.018 },
+            { str: '11,50', nx: 0.66, ny: 0.20, nw: 0.04, nh: 0.018 },
+            { str: '379015', nx: 0.08, ny: 0.24, nw: 0.07, nh: 0.018 },
+            { str: 'Europool kasse', nx: 0.18, ny: 0.24, nw: 0.12, nh: 0.018 },
+            { str: '360', nx: 0.40, ny: 0.24, nw: 0.04, nh: 0.018 },
+            { str: 'Kolli', nx: 0.45, ny: 0.24, nw: 0.04, nh: 0.018 },
+            { str: '1', nx: 0.62, ny: 0.24, nw: 0.02, nh: 0.018 },
+            { str: '306806', nx: 0.08, ny: 0.32, nw: 0.07, nh: 0.018 },
+            { str: '1', nx: 0.38, ny: 0.32, nw: 0.02, nh: 0.018 },
+            { str: '.', nx: 0.40, ny: 0.32, nw: 0.01, nh: 0.018 },
+            { str: '344', nx: 0.41, ny: 0.32, nw: 0.04, nh: 0.018 },
+            { str: 'Ks.', nx: 0.45, ny: 0.32, nw: 0.03, nh: 0.018 },
+            { str: '10', nx: 0.62, ny: 0.32, nw: 0.03, nh: 0.018 },
+            { str: '7,35', nx: 0.66, ny: 0.32, nw: 0.04, nh: 0.018 },
+            { str: '379015', nx: 0.08, ny: 0.36, nw: 0.07, nh: 0.018 },
+            { str: 'Europool kasse', nx: 0.18, ny: 0.36, nw: 0.12, nh: 0.018 },
+            { str: '1.344', nx: 0.40, ny: 0.36, nw: 0.05, nh: 0.018 },
+            { str: 'Kolli', nx: 0.45, ny: 0.36, nw: 0.04, nh: 0.018 },
+            { str: '1', nx: 0.62, ny: 0.36, nw: 0.02, nh: 0.018 },
+            { str: '306805', nx: 0.08, ny: 0.44, nw: 0.07, nh: 0.018 },
+            { str: '720', nx: 0.40, ny: 0.44, nw: 0.04, nh: 0.018 },
+            { str: 'Ks.', nx: 0.45, ny: 0.44, nw: 0.03, nh: 0.018 },
+            { str: '6', nx: 0.62, ny: 0.44, nw: 0.02, nh: 0.018 },
+            { str: '19,00', nx: 0.66, ny: 0.44, nw: 0.04, nh: 0.018 },
+            { str: '379015', nx: 0.08, ny: 0.48, nw: 0.07, nh: 0.018 },
+            { str: 'Europool kasse', nx: 0.18, ny: 0.48, nw: 0.12, nh: 0.018 },
+            { str: '720', nx: 0.40, ny: 0.48, nw: 0.04, nh: 0.018 },
+            { str: 'Kolli', nx: 0.45, ny: 0.48, nw: 0.04, nh: 0.018 },
+            { str: '1', nx: 0.62, ny: 0.48, nw: 0.02, nh: 0.018 }
+          ] }], {
+            maps: [
+              { role: 'line', columnId: 'sku', page: 1, nx: 0.08, ny: 0.20, nw: 0.07, nh: 0.018, sample: '306810', transform: 'text' },
+              { role: 'line', columnId: 'qty', page: 1, nx: 0.40, ny: 0.20, nw: 0.04, nh: 0.018, sample: '360', transform: 'number' }
+            ]
+          });
+          if (gluedQty.lines.map((r) => Number(r.qty)).join(',') !== '360,1344,720') console.warn('must not glue 10+1 into 101 / 1.011 / 161', gluedQty.lines);
           const mapCols = recipeMapTargetColumns({ tables: [
             { id: 'tbl_oh', name: 'Order Handling', columns: [{ id: 'col_pack', name: 'Packed Product' }] },
             { id: 'tbl_lines', name: 'Line Items', columns: [{ id: 'col_l_itemno', name: 'Item No' }] }
