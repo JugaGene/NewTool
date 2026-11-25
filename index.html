@@ -296,6 +296,7 @@
           One row per unique product
         </label>
         <span class="opacity-80">{{ teachHintText }}</span>
+        <span v-if="teachLinePreview" class="w-full text-[12px] font-mono text-ink-900/90">Preview {{ teachLinePreview }}</span>
         <button v-if="!panelMode && !undocked.docs" class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="popOutPanel('docs')">Move to other monitor</button>
         <button class="ml-auto rounded-md bg-ink-900 text-gold px-2 py-1 text-[12px] font-semibold" @click="saveRecipe">Save recipe</button>
         <button class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="stopRecipeTeach">Done</button>
@@ -1164,7 +1165,7 @@
                 <input type="checkbox" class="accent-teal" v-model="recipeDraft.lineUnique.enabled" :disabled="mode!=='architect'" />
                 One Line Items row per unique product number
               </label>
-              <p class="text-[11px] text-mute">Clicks on this PDF only teach the column. Map Qty / boxes on a product line (not once on the header) so 360, 1.344 and 720 stay with the packed product those SKUs look up. Crates ending in 15 are skipped; the Europool qty still belongs to the product above it.</p>
+              <p class="text-[11px] text-mute">Clicks teach the column, not one order. For boxes: click <strong class="text-mist">Antal kolli</strong> (56, 112) or the word <strong class="text-mist">kolli</strong> — never <strong class="text-mist">6 KG</strong> / <strong class="text-mist">10 BAK</strong> (that is pack size). On Rema click <strong class="text-mist">360 Ks.</strong> Keep Several products on. Crates ending in 15 are skipped.</p>
               <label v-if="recipeDraft.lineUnique && recipeDraft.lineUnique.enabled" class="text-[11px] text-mute block">Unique key column
                 <select v-model="recipeDraft.lineUnique.columnId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-2 py-1 text-[12px] text-mist" :disabled="mode!=='architect'">
                   <option value="">product number on the line</option>
@@ -3055,12 +3056,20 @@
       return !!(nxt && isPackSizeUnit(nxt.str));
     }
 
-    function colliHeaderX(items) {
+    function pdfLineY(it) {
+      return it ? it.ny + (it.nh || 0) / 2 : 0;
+    }
+
+    function colliHeaderItem(items) {
       const headers = (items || []).filter((it) => /^kolli$/i.test(String(it.str || '').trim()));
       if (!headers.length) return null;
       headers.sort((a, b) => a.ny - b.ny);
-      const h = headers[0];
-      return h.nx + h.nw / 2;
+      return headers[0];
+    }
+
+    function colliHeaderX(items) {
+      const h = colliHeaderItem(items);
+      return h ? h.nx + h.nw / 2 : null;
     }
 
     function closestQtyHit(hits, x, maxDx) {
@@ -3074,11 +3083,68 @@
       return best;
     }
 
+    function qtyHitsOnLine(items, y) {
+      const merged = joinLineNumberTokens(items, y);
+      return merged.filter((it) => isQtyToken(it.str) && !isPackSizeQtyItem(it, merged));
+    }
+
+    function qtyItemAtColumn(items, x, y) {
+      return closestQtyHit(qtyHitsOnLine(items, y), x, 0.08);
+    }
+
+    function firstProductQtyAtX(items, x) {
+      const skus = (items || []).filter((it) => skuLikeSample(it.str)).sort((a, b) => a.ny - b.ny);
+      for (let i = 0; i < skus.length; i++) {
+        const y = pdfLineY(skus[i]);
+        const extras = itemsOnPdfLine(items, y).map((t) => t.str);
+        if (extras.some((s) => /europool|kasse|emballage/i.test(String(s || '')))) continue;
+        const q = qtyItemAtColumn(items, x, y);
+        if (q) return q;
+      }
+      return null;
+    }
+
+    function findMergedHit(merged, hit) {
+      if (!hit) return null;
+      return (merged || []).find((it) => it === hit
+        || (String(it.str) === String(hit.str) && Math.abs(it.nx - hit.nx) < 0.008 && Math.abs(pdfLineY(it) - pdfLineY(hit)) < 0.012)) || null;
+    }
+
+    function snapQtyTeachHit(items, hit) {
+      if (!hit) return null;
+      const y = pdfLineY(hit);
+      const merged = joinLineNumberTokens(items, y);
+      const header = colliHeaderItem(items);
+      const hx = header ? header.nx + header.nw / 2 : null;
+      const str = String(hit.str || '').trim();
+      if (/^kolli$/i.test(str) || (/^antal$/i.test(str) && hx != null && Math.abs((hit.nx + hit.nw / 2) - hx) < 0.06)) {
+        const q = (hx != null && firstProductQtyAtX(items, hx)) || (hx != null && qtyItemAtColumn(items, hx, y));
+        if (q) return { item: q, note: 'Antal kolli' };
+        return { item: hit, note: 'Antal kolli' };
+      }
+      const local = findMergedHit(merged, hit);
+      const clickedPack = isPackSizeUnit(str) || (local && isPackSizeQtyItem(local, merged));
+      if (clickedPack && hx != null) {
+        const q = qtyItemAtColumn(items, hx, y);
+        if (q) return { item: q, note: 'Antal kolli (not pack size)' };
+      }
+      if (clickedPack) {
+        const ks = qtyBeforeBoxUnit(merged.map((it) => it.str).join(' '));
+        if (ks) {
+          const q = merged.find((it) => String(it.str || '').replace(/\s/g, '') === ks);
+          if (q) return { item: q, note: 'Ks. box count (not pack size)' };
+        }
+      }
+      return { item: hit, note: '' };
+    }
+
     function readQtyOnLine(items, map, y) {
       const cx = (map && map.nx != null) ? map.nx + (map.nw || 0) / 2 : 0.5;
       const merged = joinLineNumberTokens(items, y);
       const qtyHits = merged.filter((it) => isQtyToken(it.str) && !isPackSizeQtyItem(it, merged));
       const kolliX = colliHeaderX(items);
+      const atMap = closestQtyHit(qtyHits, cx, 0.08);
+      if (atMap && (kolliX == null || Math.abs(cx - kolliX) <= 0.12)) return atMap.str;
       if (kolliX != null) {
         const atKolli = closestQtyHit(qtyHits, kolliX, 0.08);
         if (atKolli) return atKolli.str;
@@ -3092,7 +3158,6 @@
         const before = qtyHits.filter((it) => it.nx + it.nw <= u.nx + 0.02).sort((a, b) => b.nx - a.nx)[0];
         if (before) return before.str;
       }
-      const atMap = closestQtyHit(qtyHits, cx, 0.08);
       if (atMap) return atMap.str;
       const near = nearestPdfItem(qtyHits.length ? qtyHits : items, cx, y, 0.06, 0.012);
       return near && isQtyToken(near.str) && !isPackSizeQtyItem(near, merged) ? near.str : '';
@@ -4797,6 +4862,13 @@
           return !this.undocked.recipes;
         },
         teachHintText() {
+          const pick = String(this.recipeTeach.pick || '');
+          const role = pick.indexOf(':') >= 0 ? pick.slice(0, pick.indexOf(':')) : '';
+          const col = this.teachColumns.find((c) => c.id === this.recipeTeach.colId && (!c.teachRole || c.teachRole === role || !role))
+            || this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
+          if (col && qtyLikeColumn(col)) {
+            return 'Click Antal kolli (56 / 112) or the header word “kolli”. Do not click 6 KG or 10 BAK — that is pack size. On Rema click 360 Ks. If you click pack size, ForgeGrid snaps to the box column.';
+          }
           if (this.recipeTeach.colId && this.recipeTeach.line) {
             return 'Keep this column selected. Click every product number in that PDF column (306810, 306806, 306805). Extra clicks add unique lines — they do not replace. Skip numbers ending in 15.';
           }
@@ -4806,6 +4878,21 @@
               : 'Now click that value on the PDF at the left.';
           }
           return 'Pick Line Items · Item No, then click each unique product number on the PDF.';
+        },
+        teachLinePreview() {
+          if (!this.recipeTeach.active) return '';
+          const pages = (this.pdfView && this.pdfView.pages) || [];
+          const maps = (this.recipeDraft && this.recipeDraft.maps) || [];
+          if (!pages.length || !maps.some(isQtyLikeMap) || !maps.some((m) => m.role === 'line')) return '';
+          const got = extractFromMaps(pages, this.recipeDraft);
+          const qmaps = maps.filter(isQtyLikeMap);
+          const bits = (got.lines || []).map((row) => {
+            const sku = skuValueFromLineRow(row);
+            const q = qmaps.map((m) => row[m.columnId]).find((v) => v != null && v !== '');
+            if (q == null || q === '') return '';
+            return (sku ? String(sku) : 'line') + ' → ' + q + ' boxes';
+          }).filter(Boolean);
+          return bits.join(' · ');
         }
       },
       watch: {
@@ -7857,6 +7944,24 @@
           const maps = (this.recipeDraft && this.recipeDraft.maps) || [];
           const out = [];
           maps.forEach((m) => {
+            if (isQtyLikeMap(m) && page && page.items) {
+              const hx = colliHeaderX(page.items);
+              const cx = hx != null && Math.abs((m.nx + (m.nw || 0) / 2) - hx) > 0.12 ? hx : (m.nx + (m.nw || 0) / 2);
+              const seen = {};
+              page.items.forEach((it) => {
+                if (!skuLikeSample(it.str)) return;
+                const y = pdfLineY(it);
+                const extras = itemsOnPdfLine(page.items, y).map((t) => t.str);
+                if (extras.some((s) => /europool|kasse|emballage/i.test(String(s || '')))) return;
+                const q = qtyItemAtColumn(page.items, cx, y);
+                if (!q) return;
+                const key = String(q.ny.toFixed(3)) + ':' + String(q.str);
+                if (seen[key]) return;
+                seen[key] = true;
+                out.push({ id: m.id + '-q' + key, nx: q.nx, ny: q.ny, nw: q.nw, nh: q.nh });
+              });
+              return;
+            }
             const openCol = m.role === 'line' && (skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c && c.sample)));
             if (openCol && page && page.items) {
               const cx = m.nx + (m.nw || 0) / 2;
@@ -7920,8 +8025,18 @@
           const mapCol = this.teachColumns.find((c) => c.id === this.recipeTeach.colId && (!pickRole || c.teachRole === pickRole))
             || this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
           ensureRecipeLineTable(this.store, this.recipeDraft);
+          const qtyCol = qtyLikeColumn(mapCol) || (isQtyToken(sample) && !skuLikeSample(sample));
+          let qtySnapNote = '';
+          if (qtyCol && !skuLikeSample(sample)) {
+            const snapped = snapQtyTeachHit(page.items, it);
+            if (snapped && snapped.item) {
+              it = snapped.item;
+              sample = String(it.str || '').replace(/\s+/g, ' ').trim();
+              qtySnapNote = snapped.note || '';
+            }
+          }
           const hasProductLines = (this.recipeDraft.maps || []).some((m) => m.role === 'line' && (skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample))));
-          const qtyForPacked = (hasProductLines || this.recipeTeach.line) && isQtyToken(sample) && (qtyLikeColumn(mapCol) || isQtyToken(sample));
+          const qtyForPacked = (hasProductLines || this.recipeTeach.line) && (qtyLikeColumn(mapCol) || (isQtyToken(sample) && !skuLikeSample(sample)));
           const lineCol = pickRole === 'line' || !!(mapCol && mapCol.teachRole === 'line') || qtyForPacked || (this.recipeTeach.line && skuLikeSample(sample)) || (skuLikeSample(sample) && findColumn(findTable(this.store, this.recipeDraft.lineTableId), this.recipeTeach.colId));
           if (lineCol) this.recipeTeach.line = true;
           let transform = guessTransform(sample);
@@ -8001,8 +8116,12 @@
             normalizeLineSkip(this.recipeDraft);
             if (skuLikeSample(sample) && !this.recipeDraft.lineSkip.enabled) this.recipeDraft.lineSkip.enabled = true;
             if (isQtyToken(sample) && !skuLikeSample(sample)) {
-              this.recipeHint = 'Box amount ' + sample + ' is tied to that packed product line. Other SKUs keep their own counts (360, 1.344, 720) — the first number is not copied onto every row.';
-              this.toast('Qty follows each packed product, not the first line only.');
+              this.recipeHint = qtySnapNote
+                ? 'Mapped ' + sample + ' boxes from ' + qtySnapNote + '. Other product lines use that same column (Antal kolli or Ks.), not pack size.'
+                : 'Box amount ' + sample + ' is tied to that packed product line. Other SKUs keep their own counts (360, 1.344, 720) — the first number is not copied onto every row.';
+              this.toast(qtySnapNote
+                ? 'Qty column is ' + sample + ' (' + qtySnapNote + ').'
+                : 'Qty follows each packed product, not the first line only.');
             } else {
               this.recipeHint = 'Mapped the product-number column from ' + sample + '. Other PDFs can have different SKUs in this column — Fill will take each unique number (skip crates ending in 15). Then map Qty on a product line so each packed product gets its own box count.';
               this.toast('Column mapped. Later orders with different products still fill — unique numbers only.');
@@ -8869,6 +8988,22 @@
           });
           if (dagrofaQty.lines.map((r) => String(r.sku)).join(',') !== '344845,340250') console.warn('Dagrofa products should skip Europool kasse', dagrofaQty.lines);
           if (dagrofaQty.lines.map((r) => Number(r.qty)).join(',') !== '56,112') console.warn('Dagrofa Antal kolli is 56 loose / 112 trays, not 6 KG pack size', dagrofaQty.lines);
+          const dItems = [
+            { str: 'kolli', nx: 0.6115, ny: 0.3086, nw: 0.0285, nh: 0.0134 },
+            { str: '988010', nx: 0.3134, ny: 0.3321, nw: 0.0342, nh: 0.0134 },
+            { str: 'KASSE', nx: 0.1785, ny: 0.3321, nw: 0.0285, nh: 0.0134 },
+            { str: '168', nx: 0.6195, ny: 0.3321, nw: 0.0171, nh: 0.0134 },
+            { str: '344845', nx: 0.3134, ny: 0.3758, nw: 0.0342, nh: 0.0134 },
+            { str: '6', nx: 0.0454, ny: 0.3758, nw: 0.0057, nh: 0.0134 },
+            { str: 'KG', nx: 0.0858, ny: 0.3758, nw: 0.0114, nh: 0.0134 },
+            { str: '56', nx: 0.6195, ny: 0.3758, nw: 0.0114, nh: 0.0134 },
+            { str: '340250', nx: 0.3134, ny: 0.4195, nw: 0.0342, nh: 0.0134 },
+            { str: '112', nx: 0.6195, ny: 0.4195, nw: 0.0171, nh: 0.0134 }
+          ];
+          const snapPack = snapQtyTeachHit(dItems, dItems.find((x) => x.str === '6'));
+          if (!snapPack || String(snapPack.item.str) !== '56') console.warn('clicking 6 KG must snap to Antal kolli 56', snapPack);
+          const snapHead = snapQtyTeachHit(dItems, dItems.find((x) => x.str === 'kolli'));
+          if (!snapHead || String(snapHead.item.str) !== '56') console.warn('clicking kolli header must bind first product colli 56', snapHead);
           const mapCols = recipeMapTargetColumns({ tables: [
             { id: 'tbl_oh', name: 'Order Handling', columns: [{ id: 'col_pack', name: 'Packed Product' }] },
             { id: 'tbl_lines', name: 'Line Items', columns: [{ id: 'col_l_itemno', name: 'Item No' }] }
