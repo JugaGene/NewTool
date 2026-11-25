@@ -2787,11 +2787,33 @@
     }
 
     function coerceRecipeCell(store, col, field, raw) {
+      const hit = field && field.fill === 'lookup' ? findRecipeLookupRow(store, field, raw) : null;
       let val = resolveRecipeFill(store, field, raw);
       if (col && isLinkCol(col)) {
-        val = matchLinkedRecord(store, col, val) || matchLinkedRecord(store, col, raw) || val;
+        const lt = findTable(store, col.link && col.link.tableId);
+        if (hit && lt && (lt.records || []).some((r) => r.id === hit.id)) return hit.id;
+        val = matchLinkedRecord(store, col, val) || matchLinkedRecord(store, col, raw) || '';
       }
       return val;
+    }
+
+    function recipeLookupFailMessage(store, col, map, raw) {
+      const needle = String(raw == null ? '' : raw).trim();
+      const table = map && map.lookup && findTable(store, map.lookup.tableId);
+      const matchCol = table && findColumn(table, map.lookup.matchColumnId);
+      const sku = table && skuLikeColumns(table)[0];
+      const linked = col && isLinkCol(col) && findTable(store, col.link && col.link.tableId);
+      const found = scanCatalogsForNeedle(store, needle);
+      let msg = (col && col.name ? col.name : 'Cell') + ': no match for “' + needle + '”.';
+      if (table && matchCol) {
+        msg = (col && col.name ? col.name : 'Cell') + ': looked on “' + table.name + '” for ' + matchCol.name + ' = “' + needle + '”.';
+        if (sku && sku.id !== matchCol.id) msg += ' That number is Customer Product Code / SKU, not ' + matchCol.name + '. Match “' + sku.name + '”.';
+      }
+      if (found && (!table || found.table.id !== table.id)) msg += ' Found it on “' + found.table.name + '”.';
+      if (linked && found && linked.id !== found.table.id) {
+        msg += ' Column “' + col.name + '” is linked to “' + linked.name + '”, not “' + found.table.name + '”. Point that column at Packed Products.';
+      }
+      return msg;
     }
 
     function guessTransform(s) {
@@ -6840,12 +6862,18 @@
             f.lookup.tableId = (found && found.table.id) || (hint && hint.id) || '';
           }
           const table = findTable(this.store, f.lookup.tableId);
-          if (table && !f.lookup.matchColumnId) {
+          if (table) {
             const sample = String(f.sample || '').trim();
             const sku = skuLikeColumns(table)[0];
-            const name = (table.columns || []).find((c) => /name|navn/i.test(c.name || ''));
-            f.lookup.matchColumnId = (/^\d{3,}$/.test(sample) && sku ? sku.id : '') || (name && name.id) || '';
-            if (/^\d{3,}$/.test(sample)) f.lookup.match = 'equals';
+            const matchCol = findColumn(table, f.lookup.matchColumnId);
+            const nameLike = matchCol && /name|navn|title/i.test(matchCol.name || '') && !/cod|sku|ean/i.test(matchCol.name || '');
+            if (/^\d{3,}$/.test(sample) && sku && (!f.lookup.matchColumnId || nameLike)) {
+              f.lookup.matchColumnId = sku.id;
+              f.lookup.match = 'equals';
+            } else if (!f.lookup.matchColumnId) {
+              const name = (table.columns || []).find((c) => /name|navn/i.test(c.name || ''));
+              f.lookup.matchColumnId = (name && name.id) || '';
+            }
           }
         },
         addMapAlso(m) {
@@ -7005,11 +7033,7 @@
               const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
               if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
               else if (col && raw !== '' && raw != null && (isLinkCol(col) || /product|customer|sku/i.test(col.name || ''))) {
-                const mapHint = map && map.lookup && findColumn(findTable(this.store, map.lookup.tableId), map.lookup.matchColumnId);
-                const skuNote = mapHint && /^\d{3,}$/.test(String(raw).trim()) && /name|navn|title/i.test(mapHint.name || '')
-                  ? ' “' + raw + '” is a SKU — set Match this PDF value to SKU / Item No, not ' + mapHint.name + '.'
-                  : ' Add that SKU/name on Products/Customers, or match SKU instead of the product name.';
-                this.toast(col.name + ': no match for “' + raw + '”.' + skuNote, 'warn');
+                this.toast(recipeLookupFailMessage(this.store, col, map, raw), 'warn');
               }
               if (map) this.applyRecipeLookupAlso(headerTable, rec, map, raw);
             });
