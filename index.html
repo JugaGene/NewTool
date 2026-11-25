@@ -3110,6 +3110,26 @@
         || null;
     }
 
+    function siblingOrderRecords(table, rec) {
+      if (!table || !rec) return [];
+      const refCol = (table.columns || []).find((c) => /customer\s*ref|kunde\s*ref|^po$|ordre/i.test(c.name || '') && !/delivery|packing|date/i.test(c.name || ''));
+      const attCol = (table.columns || []).find((c) => c.type === 'attachment');
+      const ref = refCol ? String(rawStored(rec, refCol) || '').trim() : '';
+      const att = attCol ? rawStored(rec, attCol) : null;
+      const attId = isAttachMeta(att) ? att.id : '';
+      const attName = isAttachMeta(att) ? String(att.name || '') : '';
+      return (table.records || []).filter((r) => {
+        if (!r || r.id === rec.id) return false;
+        if (ref && refCol && String(rawStored(r, refCol) || '').trim() === ref) return true;
+        if (attCol) {
+          const a = rawStored(r, attCol);
+          if (attId && isAttachMeta(a) && a.id === attId) return true;
+          if (attName && isAttachMeta(a) && a.name === attName) return true;
+        }
+        return false;
+      });
+    }
+
     function skuValueFromLineRow(row) {
       if (!row) return '';
       const keys = Object.keys(row);
@@ -8093,14 +8113,17 @@
               return;
             }
             let filled = 0;
+            const packedColEarly = packedProductColumn(headerTable);
             (recipe.headerFields || []).forEach((f) => {
               const col = this.recipeCol(headerTable, f.columnId);
+              if (packedColEarly && col && col.id === packedColEarly.id) return;
               const raw = f.fill === 'fixed' ? f.fixed : recipeFieldValue(doc.text, f);
               const val = coerceRecipeCell(this.store, col, f, raw);
               if (this.recipeWriteCell(headerTable, rec, col, val)) filled += 1;
             });
             Object.keys(click.header).forEach((colId) => {
               const col = this.recipeCol(headerTable, colId);
+              if (packedColEarly && col && col.id === packedColEarly.id) return;
               const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role !== 'line');
               const raw = click.header[colId];
               const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
@@ -8140,10 +8163,16 @@
               if (sku && /15$/.test(String(sku).replace(/\s/g, ''))) return false;
               return true;
             });
-            const packedCol = packedProductColumn(headerTable);
+            const packedCol = packedColEarly || packedProductColumn(headerTable);
             const lineMaps = (recipe.maps || []).filter((m) => m.role === 'line');
             const lineOnHeader = !!(packedCol || lineMaps.some((m) => findColumn(headerTable, m.columnId)));
             const separateLines = !!(lineTable && lineTable.id !== headerTable.id && lineMaps.some((m) => findColumn(lineTable, m.columnId)));
+            if (lineOnHeader && opts.replaceLines !== false) {
+              siblingOrderRecords(headerTable, rec).forEach((r) => {
+                headerTable.records = headerTable.records.filter((x) => x.id !== r.id);
+              });
+              if (packedCol) this.setCell(rec, packedCol, '', true, headerTable);
+            }
             const writeProductOnto = (table, target, row) => {
               Object.keys(row || {}).forEach((colId) => {
                 const col = this.recipeCol(table, colId);
@@ -8180,7 +8209,7 @@
             };
             if (lineOnHeader && productRows.length) {
               const copyCols = (headerTable.columns || []).filter((c) => {
-                if (c.type === 'autonumber' || c.type === 'formula' || c.type === 'rollup' || c.type === 'lookup') return false;
+                if (c.type === 'autonumber' || c.type === 'formula' || c.type === 'rollup' || c.type === 'lookup' || c.type === 'attachment') return false;
                 if (packedCol && c.id === packedCol.id) return false;
                 return true;
               });
@@ -8559,6 +8588,20 @@
             ]
           });
           if (headerSku.lines.length !== 3 || headerSku.lines.some((r) => String(r.sku) === '421268')) console.warn('order number 421268 must not become an extra product line', headerSku.lines);
+          const sibTable = {
+            columns: [
+              { id: 'ref', name: 'Customer Ref', type: 'text' },
+              { id: 'att', name: 'Attachment', type: 'attachment' },
+              { id: 'pack', name: 'Packed Product', type: 'text' }
+            ],
+            records: [
+              { id: 'keep', data: { ref: 'KO421268', att: { id: 'a1', name: 'po.pdf' } } },
+              { id: 'dup', data: { ref: 'KO421268', att: { id: 'a1', name: 'po.pdf' } } },
+              { id: 'other', data: { ref: '1220391355', att: { id: 'a2', name: 'other.pdf' } } }
+            ]
+          };
+          const sibs = siblingOrderRecords(sibTable, sibTable.records[0]);
+          if (sibs.length !== 1 || sibs[0].id !== 'dup') console.warn('reattach should replace same-order rows only', sibs);
           const lkWs = sampleWorkspace('Lookup');
           const custF = remR.headerFields.find((f) => f.fill === 'lookup');
           if (resolveRecipeFill(lkWs, custF, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('customer lookup failed');
