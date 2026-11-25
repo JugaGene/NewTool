@@ -1,12 +1,12 @@
 # ForgeGrid
 
-A Phase 1 Chrome prototype of an enterprise data and order workspace. Create your own **categories** (programs, dashboards, references — you name them), sheets, custom columns, lookup links, and formulas. Drop a PDF, screenshot, or EDI file on the left and enter rows on the right. Export a real multi-sheet Excel workbook in one click.
+A Phase 1 Chrome prototype of an enterprise data and order workspace. Create your own **categories** (programs, dashboards, references — you name them), sheets, custom columns, lookup links, formulas, and **client order recipes**. Drop a PDF, screenshot, or EDI file on the left and enter rows on the right. Export a real multi-sheet Excel workbook in one click.
 
 Everything runs in the browser. There is no server. Data lives in `localStorage` on this machine.
 
 ## Open it
 
-Double-click `index.html` and it will open in Google Chrome (an internet connection is required the first time so Tailwind, Vue 3, and SheetJS can load from CDNs).
+Double-click `index.html` and it will open in Google Chrome (an internet connection is required the first time so Tailwind, Vue 3, SheetJS, and PDF.js can load from CDNs).
 
 Or serve the folder:
 
@@ -20,9 +20,9 @@ Then visit `http://127.0.0.1:8764`.
 
 1. Name the workspace.
 2. Set a 4–8 digit Architect PIN (you choose it; it never leaves this browser).
-3. Leave **Load sample operations workspace** checked to get Customers, Products, Orders, and Line Items already linked together.
+3. Leave **Load sample operations workspace** checked to get Customers, Products, Orders, Line Items, and a **Rema** recipe already linked together.
 
-You start in **Operator Mode**. Structure is locked. Switch to **Architect Mode** with the PIN when you need to add tables, columns, lookups, or formulas.
+You start in **Operator Mode**. Structure is locked. Switch to **Architect Mode** with the PIN when you need to add tables, columns, lookups, formulas, or recipes.
 
 ## What to try
 
@@ -43,6 +43,7 @@ You start in **Operator Mode**. Structure is locked. Switch to **Architect Mode*
 - **This column, row above** — `{This[-1]}` is the same column one row above (Excel `A1` when you are on `A2`). `{This[-1]}+1` or `ABOVE()+1` increments it. Sample **Line #** does this (1, 2, 3…). **Running Total** is `COALESCE({This[-1]},0)+{Line Total}`. Ranges: `SUM({Qty[-2:0]})` is this row and the two above. In the formula editor, use the **Row offset** control (`-1` is the row above) and **Insert cell + 1**. The formula runs on every row in that column.
 - **Same-column formulas** — on a number or date column, set `{This}+1` so the value you type in that cell is the input. Dates use day/month/year: `01/01/2026+1` → `02/01/2026`. Sample **Hold Until** does this; **Follow-up** is `{Order Date}+1`.
 - **Fields** — Architects hide a column with the eye on the header, then **Fields → Unhide**. **Hide row** is Architect-only. Operators do not see hide controls; they can still unhide from Fields if a column was already hidden.
+- **Client recipes** — Architects open **Recipes** and name a layout after the client (Rema, and later others). Map each PDF field with a regex capture group onto a column on the sheet you already designed. Optional line-item regex writes extra rows on a second sheet and links them back. Operators drop the PDF, pick **Rema** (or let detection pick it when the file says REMA), then **Fill sheet**. The sample Rema recipe reads order number into Customer PO, receive date, qty, unit price, and attaches the PDF.
 - **Documents** — open the split-screen, drop a PDF/image/EDI file (or paste a screenshot with Ctrl+V), and use **Entry form** on the right. PDFs hide the thumbnail strip and fit to page width. **Read large** opens a full-window reader (zoom, page width, Escape to close). **New window** opens Chrome’s own PDF viewer so you can put the order on a second screen. Drag the splitter to give the document more width.
 - **Attachment columns** — Architects add a column type **Attachment**. A filled paper thumbnail means a file is attached (hover for the name). The small line icons beside it open the file beside the row, open a new window, replace, or remove. An empty dashed paper with a plus attaches a file. Sample **Orders** has **Source file**. Files stay in this browser (IndexedDB); a JSON backup stores the file name, not the bytes.
 - **Excel** — downloads one worksheet per table, plus `_Schema` and `_Audit`.
