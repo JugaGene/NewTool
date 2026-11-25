@@ -405,9 +405,7 @@
             </div>
             <div v-else class="h-full rounded-xl border border-line bg-ink-950 overflow-hidden relative" :class="recipeTeach.active && 'pdf-teach'">
               <div v-if="activeDoc.kind==='pdf'" class="h-full relative bg-white">
-                <object v-show="!pdfClickReady" class="absolute inset-0 w-full h-full" :data="docPreviewSrc" type="application/pdf">
-                  <embed :src="docPreviewSrc" type="application/pdf" class="w-full h-full" />
-                </object>
+                <iframe v-show="!pdfClickReady" :src="pdfFrameSrc" class="absolute inset-0 w-full h-full border-0 bg-white" title="PDF preview"></iframe>
                 <div v-show="pdfClickReady" class="absolute inset-0 overflow-auto">
                   <div v-for="page in pdfView.pages" :key="(activeDoc && activeDoc.id) + '-' + page.num" class="pdf-page mx-auto">
                     <canvas :ref="el => renderPdfCanvas(page, el)" :width="page.width" :height="page.height"></canvas>
@@ -3553,15 +3551,23 @@
         </div>`
     };
 
+    function yieldUi() {
+      return new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
     function openPdfDocument(spec) {
       const lib = window.pdfjsLib;
       if (!lib) return Promise.reject(new Error('pdf.js missing'));
-      const src = Object.assign({ disableWorker: true, isEvalSupported: false }, spec);
+      const src = Object.assign({ isEvalSupported: false }, spec);
       const task = lib.getDocument(src);
-      return Promise.race([
-        task.promise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('PDF timed out')), 20000))
-      ]);
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          try { task.destroy(); } catch (e) {}
+          reject(new Error('PDF timed out'));
+        }, 20000);
+      });
+      return Promise.race([task.promise, timeout]).finally(() => clearTimeout(timer));
     }
 
     if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
@@ -3944,7 +3950,12 @@
         docPreviewSrc() {
           const d = this.activeDoc;
           if (!d) return '';
-          return d.preview || d.url || '';
+          return d.url || d.preview || '';
+        },
+        pdfFrameSrc() {
+          const d = this.activeDoc;
+          if (!d || d.kind !== 'pdf' || !d.url) return '';
+          return d.url + '#toolbar=0&navpanes=0&scrollbar=1&view=FitH';
         },
         pdfClickReady() {
           return !!(this.recipeTeach.active && this.pdfView.pages && this.pdfView.pages.length);
@@ -3992,9 +4003,10 @@
           this.$nextTick(() => this.bindSheet());
         },
         activeDoc(doc) {
-          if (doc) this.hydratePreview(doc);
-          if (doc && doc.kind === 'pdf' && this.recipeTeach.active) this.loadPdfView(doc);
-          else if (!(doc && doc.kind === 'pdf')) this.pdfView = { pages: [], src: '', error: '' };
+          if (doc && doc.kind === 'image') this.hydratePreview(doc);
+          if (doc && doc.kind === 'pdf' && this.recipeTeach.active) {
+            setTimeout(() => this.loadPdfView(doc), 250);
+          } else if (!(doc && doc.kind === 'pdf')) this.pdfView = { pages: [], src: '', error: '' };
           this.sendUndockPdf();
         },
         recipeTeach: {
@@ -4002,7 +4014,7 @@
           handler(v) {
             if (this._remoteTeach) return;
             this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, line: v.line } });
-            if (v && v.active && this.activeDoc && this.activeDoc.kind === 'pdf') this.loadPdfView(this.activeDoc);
+            if (v && v.active && this.activeDoc && this.activeDoc.kind === 'pdf') setTimeout(() => this.loadPdfView(this.activeDoc), 250);
           }
         },
         docsPaneVisible(v) {
@@ -6623,19 +6635,21 @@
           if (kind === 'pdf' && this.splitWidth < 52) this.splitWidth = 52;
           this.audit('document.open', file.name, kind);
           this.recipeHint = 'Opened ' + file.name + '.';
-          this.hydratePreview(doc);
-          setTimeout(() => {
+          if (kind === 'image') this.hydratePreview(doc);
+          const later = window.requestIdleCallback || ((fn) => setTimeout(fn, 400));
+          later(() => {
             this.readDocText(doc).then((t) => {
               doc.text = t;
               this.afterDocText(doc);
             }).catch(() => {
               this.recipeHint = 'Could not read text from this file. You can still map a recipe after pasting text, or try a clearer PDF.';
             });
-          }, 50);
+          });
         },
         async hydratePreview(doc) {
           if (!doc) return;
           if (!doc.url && doc.file) doc.url = URL.createObjectURL(doc.file);
+          if (doc.kind === 'pdf') return;
           if (doc.preview || !doc.file) return;
           try {
             doc.preview = await blobToDataUrl(doc.file);
@@ -6645,13 +6659,13 @@
           if (!doc) return '';
           if (doc.kind === 'text') return doc.text || (doc.file ? await doc.file.text() : '');
           if (doc.kind === 'pdf') {
-            try {
-              const data = await this.pdfBytes(doc);
-              const pdf = await openPdfDocument({ data });
+            if (doc.url) {
+              const pdf = await openPdfDocument({ url: doc.url });
               return this.extractPdfTextFromPdf(pdf);
-            } catch (e) {
-              return this.extractPdfText(doc.url);
             }
+            const data = await this.pdfBytes(doc);
+            const pdf = await openPdfDocument({ data });
+            return this.extractPdfTextFromPdf(pdf);
           }
           if (doc.kind === 'image') return '';
           return doc.text || '';
@@ -6686,6 +6700,7 @@
         async extractPdfTextFromPdf(pdf) {
           const parts = [];
           for (let i = 1; i <= pdf.numPages; i++) {
+            await yieldUi();
             const page = await pdf.getPage(i);
             const content = await page.getTextContent();
             let line = '';
@@ -6894,14 +6909,17 @@
         async parsePdfPages(doc) {
           if (!doc || !window.pdfjsLib) return [];
           if (doc._pdfPages && doc._pdfPages.length) return doc._pdfPages;
-          const data = await this.pdfBytes(doc);
-          const pdf = await openPdfDocument({ data });
+          await yieldUi();
+          const pdf = doc.url
+            ? await openPdfDocument({ url: doc.url })
+            : await openPdfDocument({ data: await this.pdfBytes(doc) });
           const pages = [];
           for (let p = 1; p <= pdf.numPages; p++) {
+            await yieldUi();
             const page = await pdf.getPage(p);
             const viewport = page.getViewport({ scale: 1.35 });
             const content = await page.getTextContent();
-            const items = explodePdfWords(content.items.filter((it) => it.str && String(it.str).trim()).map((it) => {
+            const mapped = content.items.filter((it) => it.str && String(it.str).trim()).map((it) => {
               const r = pdfItemRect(it, viewport);
               return {
                 str: it.str,
@@ -6910,7 +6928,8 @@
                 nw: r.w / viewport.width,
                 nh: r.h / viewport.height
               };
-            }));
+            });
+            const items = this.recipeTeach.active ? explodePdfWords(mapped) : mapped;
             pages.push({ num: p, width: viewport.width, height: viewport.height, items, viewport, page });
           }
           doc._pdfPages = pages;
