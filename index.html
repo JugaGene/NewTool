@@ -86,6 +86,8 @@
     .search-combo input { flex: 1; min-width: 0; }
     .search-combo .sq { width: 28px; display: inline-flex; align-items: center; justify-content: center; border-left: 1px solid #223250; color: #8ea0be; background: #10192c; flex-shrink: 0; }
     .search-combo .sq:hover { color: #3ecfbe; }
+    .tear-bar { cursor: grab; user-select: none; }
+    .tear-bar:active { cursor: grabbing; }
     .attach-chip { display: flex; align-items: center; gap: 4px; min-width: 0; }
     .paper-doc { flex-shrink: 0; width: 22px; height: 28px; padding: 0; border: 0; background: transparent; line-height: 0; cursor: pointer; }
     .paper-doc svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 1px 1px rgba(0,0,0,.35)); }
@@ -377,7 +379,7 @@
 
         <!-- Split document pane -->
         <section v-if="docsPaneVisible" class="shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-line bg-ink-900 md:min-w-[240px]" :class="panelMode==='docs' && 'flex-1 min-w-0 border-0'" :style="splitPaneStyle">
-          <div class="h-10 shrink-0 border-b border-line flex items-center gap-2 px-2">
+          <div class="h-10 shrink-0 border-b border-line flex items-center gap-2 px-2 tear-bar" title="Drag this bar to open a window on another monitor" @mousedown="startDocsTear">
             <div class="text-xs font-medium truncate">Source document</div>
             <div class="ml-auto flex items-center gap-1">
               <label class="text-[11px] rounded-md px-2 py-1 bg-ink-700 cursor-pointer hover:brightness-110">
@@ -931,9 +933,9 @@
       </modal-frame>
 
       <!-- Client recipes -->
-      <modal-frame v-if="recipeOpen && recipesPaneVisible" title="Client order recipes" wide :page="panelMode==='recipes'" @close="closeRecipesPane">
+      <modal-frame v-if="recipeOpen && recipesPaneVisible" title="Client order recipes" wide detachable :page="panelMode==='recipes'" @close="closeRecipesPane" @detach="popOutPanel('recipes')">
         <p class="text-sm text-mute mb-3">Unlock Architect, open a PDF with <strong class="text-mist">Docs → Open file</strong>, then <strong class="text-mist">Teach on PDF</strong>: pick a column and click that value on the page. You can still type regex below if you prefer.
-          <button v-if="!panelMode" type="button" class="ml-2 text-teal" @click="popOutPanel('recipes')">Pop out to another window</button>
+          Drag the gold title bar, or <strong class="text-mist">Move to other monitor</strong>, to open a real window you can put on a second screen (a dialog cannot leave this Chrome window).
         </p>
         <div v-if="mode!=='architect'" class="mb-3 rounded-lg border border-gold/40 bg-gold/10 px-3 py-2 text-sm text-gold">
           You are in Operator Mode, so recipes are read-only. Click <strong class="text-white">Architect</strong> in the top bar and enter your PIN to add, edit, or delete recipes.
@@ -3042,14 +3044,51 @@
     };
 
     const ModalFrame = {
-      props: { title: String, wide: Boolean, page: Boolean },
-      emits: ['close'],
+      props: { title: String, wide: Boolean, page: Boolean, detachable: Boolean },
+      emits: ['close', 'detach'],
+      data() { return { pos: { x: 0, y: 0 }, start: null }; },
+      computed: {
+        boxStyle() {
+          if (this.page) return {};
+          if (!this.pos.x && !this.pos.y) return {};
+          return { transform: 'translate(' + this.pos.x + 'px,' + this.pos.y + 'px)' };
+        }
+      },
+      methods: {
+        startTear(e) {
+          if (!this.detachable || this.page || e.button !== 0) return;
+          if (e.target.closest && e.target.closest('button')) return;
+          e.preventDefault();
+          this.start = { x: e.clientX, y: e.clientY, px: this.pos.x, py: this.pos.y };
+          window.addEventListener('mousemove', this.onTearMove);
+          window.addEventListener('mouseup', this.endTear);
+        },
+        onTearMove(e) {
+          if (!this.start) return;
+          const dx = e.clientX - this.start.x;
+          const dy = e.clientY - this.start.y;
+          this.pos = { x: this.start.px + dx, y: this.start.py + dy };
+          if (Math.hypot(dx, dy) > 88) {
+            this.endTear();
+            this.$emit('detach');
+          }
+        },
+        endTear() {
+          this.start = null;
+          window.removeEventListener('mousemove', this.onTearMove);
+          window.removeEventListener('mouseup', this.endTear);
+        }
+      },
+      unmounted() { this.endTear(); },
       template: `
         <div :class="page ? 'flex-1 min-h-0 flex flex-col bg-ink-900' : 'fixed inset-0 z-[70] flex items-start justify-center p-4 md:p-8 bg-black/55'" @click.self="page ? undefined : $emit('close')">
-          <div class="w-full border border-line bg-ink-850 shadow-panel flex flex-col min-h-0" :class="page ? 'flex-1 rounded-none border-0 shadow-none' : (wide ? 'max-w-3xl rounded-2xl' : 'max-w-lg rounded-2xl')" @click.stop>
-            <div class="px-4 py-3 border-b border-line flex items-center justify-between shrink-0">
-              <h3 class="font-semibold">{{ title }}</h3>
-              <button class="text-mute hover:text-white" @click="$emit('close')"><icon name="x" /></button>
+          <div class="w-full border border-line bg-ink-850 shadow-panel flex flex-col min-h-0" :class="page ? 'flex-1 rounded-none border-0 shadow-none' : (wide ? 'max-w-3xl rounded-2xl' : 'max-w-lg rounded-2xl')" :style="boxStyle" @click.stop>
+            <div class="px-4 py-3 border-b border-line flex items-center justify-between shrink-0 gap-2" :class="detachable && !page && 'tear-bar'" @mousedown="startTear">
+              <h3 class="font-semibold min-w-0 truncate">{{ title }}</h3>
+              <div class="flex items-center gap-1 shrink-0">
+                <button v-if="detachable && !page" type="button" class="text-[11px] rounded-md bg-gold text-ink-900 font-semibold px-2 py-1" @click="$emit('detach')" title="Opens a real Chrome window you can drag onto another monitor">Move to other monitor</button>
+                <button class="text-mute hover:text-white" @click="$emit('close')"><icon name="x" /></button>
+              </div>
             </div>
             <div class="p-4 overflow-y-auto" :class="page ? 'flex-1 min-h-0' : 'max-h-[min(72vh,560px)]'"><slot /></div>
           </div>
@@ -6241,14 +6280,37 @@
         rememberUndock() {
           try { sessionStorage.setItem(UNDOCK_SESSION, JSON.stringify(this.undocked)); } catch (e) {}
         },
+        startDocsTear(e) {
+          if (this.panelMode || e.button !== 0) return;
+          if (e.target.closest && e.target.closest('button,label,input,select')) return;
+          const x0 = e.clientX, y0 = e.clientY;
+          const move = (ev) => {
+            if (Math.hypot(ev.clientX - x0, ev.clientY - y0) > 72) {
+              window.removeEventListener('mousemove', move);
+              window.removeEventListener('mouseup', up);
+              this.popOutPanel('docs');
+            }
+          };
+          const up = () => {
+            window.removeEventListener('mousemove', move);
+            window.removeEventListener('mouseup', up);
+          };
+          window.addEventListener('mousemove', move);
+          window.addEventListener('mouseup', up);
+        },
         popOutPanel(name) {
           const u = new URL(location.href);
           u.searchParams.set('panel', name);
-          const feat = name === 'docs'
-            ? 'popup=yes,width=980,height=1200,left=60,top=30'
-            : 'popup=yes,width=920,height=1000,left=100,top=50';
-          const w = window.open(u.toString(), 'forgegrid-' + name, feat);
-          if (!w) return this.toast('Allow pop-ups so the panel can open on another monitor.', 'warn');
+          const wSize = name === 'docs' ? 980 : 920;
+          const hSize = name === 'docs' ? 1100 : 980;
+          const left = Math.round((window.screenX || window.screenLeft || 0) + Math.max(80, (window.outerWidth || 900) * 0.55));
+          const top = Math.round((window.screenY || window.screenTop || 0) + 48);
+          const feat = 'popup=true,resizable=yes,scrollbars=yes,width=' + wSize + ',height=' + hSize + ',left=' + left + ',top=' + top;
+          const w = window.open(u.toString(), 'fg_' + name + '_' + Date.now(), feat);
+          if (!w) {
+            return this.toast('Allow pop-ups for this site. Chrome will not let a dialog be dragged onto another monitor — it must open as its own window.', 'warn');
+          }
+          try { w.focus(); } catch (e) {}
           this.popouts[name] = w;
           this.undocked[name] = true;
           this.rememberUndock();
@@ -6257,7 +6319,7 @@
             this.docReaderOpen = false;
           }
           if (name === 'recipes') this.recipeOpen = false;
-          this.toast('Drag that window onto another monitor. Clicks on the PDF still map here.');
+          this.toast('Drag that new window’s title bar onto the other monitor.');
           setTimeout(() => this.sendUndockPdf(), 400);
         },
         dockPanel(name) {
