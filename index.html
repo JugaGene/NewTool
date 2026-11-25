@@ -270,12 +270,12 @@
         <label class="inline-flex items-center gap-1 text-[12px]">Column
           <select v-model="recipeTeach.colId" class="rounded-md bg-ink-900 text-mist px-2 py-1" @change="onTeachColChange">
             <option value="">Pick a column…</option>
-            <option v-for="c in teachColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
+            <option v-for="c in teachColumns" :key="(c.teachRole || '') + c.id" :value="c.id">{{ c.teachLabel || c.name }}</option>
           </select>
         </label>
         <label class="inline-flex items-center gap-1 text-[12px]">
           <input type="checkbox" v-model="recipeTeach.line" class="accent-ink-900" @change="onTeachLineToggle" />
-          Repeats on each line
+          Several products (line items)
         </label>
         <label v-if="recipeTeach.line && recipeDraft.lineSkip" class="inline-flex items-center gap-1 text-[12px]">
           <input type="checkbox" v-model="recipeDraft.lineSkip.enabled" class="accent-ink-900" @change="saveRecipe" />
@@ -2877,7 +2877,11 @@
 
     function samePdfColumn(a, b) {
       if (!a || !b) return false;
-      return Math.abs((a.nx + (a.nw || 0) / 2) - (b.nx + (b.nw || 0) / 2)) < 0.05;
+      return Math.abs((a.nx + (a.nw || 0) / 2) - (b.nx + (b.nw || 0) / 2)) < 0.08;
+    }
+
+    function skuLikeSample(s) {
+      return /^\d{4,}$/.test(String(s == null ? '' : s).replace(/[\s.]/g, ''));
     }
 
     function uniqueRecipeLines(recipe, lines) {
@@ -3364,15 +3368,21 @@
       const lineMaps = maps.filter((m) => m.role === 'line');
       const lines = [];
       if (lineMaps.length) {
-        const skuMap = lineMaps.find((m) => /^\d{4,}$/.test(String(m.sample || '').replace(/[\s.]/g, '')));
+        const skuMap = lineMaps.find((m) => skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample)));
         const m0 = skuMap || lineMaps[0];
         const page = pages[(m0.page || 1) - 1];
         const items = (page && page.items) || [];
         const cx0 = m0.nx + m0.nw / 2;
         const sample = String(m0.sample || '').trim();
-        const skuAnchor = /^\d{4,}$/.test(sample.replace(/[\s.]/g, ''));
-        let hits = items.filter((it) => Math.abs((it.nx + it.nw / 2) - cx0) < 0.04 && String(it.str).trim());
-        if (skuAnchor) hits = hits.filter((it) => /^\d{4,}$/.test(String(it.str || '').replace(/[\s.]/g, '')));
+        const skuAnchor = skuLikeSample(sample) || (m0.choices || []).some((c) => skuLikeSample(c.sample));
+        let hits = items.filter((it) => Math.abs((it.nx + it.nw / 2) - cx0) < 0.08 && String(it.str).trim());
+        if (skuAnchor) hits = hits.filter((it) => skuLikeSample(it.str));
+        (m0.choices || []).forEach((c) => {
+          const y = (c.ny || 0) + (c.nh || 0) / 2;
+          if (!hits.some((it) => Math.abs((it.ny + it.nh / 2) - y) < 0.01 && skuLikeSample(it.str))) {
+            hits = hits.concat([{ str: c.sample, nx: c.nx, ny: c.ny, nw: c.nw || 0.02, nh: c.nh || 0.02 }]);
+          }
+        });
         const clusters = [];
         hits.map((it) => it.ny + it.nh / 2).sort((a, b) => a - b).forEach((y) => {
           const last = clusters[clusters.length - 1];
@@ -4452,12 +4462,20 @@
           return t ? t.columns : [];
         },
         teachColumns() {
-          if (this.recipeTeach.line) {
-            const t = findTable(this.store, this.recipeDraft.lineTableId) || this.currentTable;
-            return t ? t.columns : [];
+          const out = [];
+          const lt = findTable(this.store, this.recipeDraft.lineTableId);
+          const ht = findTable(this.store, this.recipeDraft.headerTableId) || this.currentTable;
+          if (lt) {
+            (lt.columns || []).forEach((c) => {
+              out.push(Object.assign({}, c, { teachRole: 'line', teachLabel: lt.name + ' · ' + c.name }));
+            });
           }
-          const t = findTable(this.store, this.recipeDraft.headerTableId) || this.currentTable;
-          return t ? t.columns : [];
+          if (ht) {
+            (ht.columns || []).forEach((c) => {
+              out.push(Object.assign({}, c, { teachRole: 'header', teachLabel: ht.name + ' · ' + c.name }));
+            });
+          }
+          return out;
         },
         readerDoc() { return this.attachPreview || this.activeDoc; },
         docPreviewSrc() {
@@ -4502,18 +4520,15 @@
           return !this.undocked.recipes;
         },
         teachHintText() {
-          if (this.recipeTeach.line) {
-            if (this.recipeTeach.colId) {
-              return 'Click values on this column. Extra product numbers on the same column are more unique lines, not a replacement. Skip crate numbers ending in 15.';
-            }
-            return 'Keep Repeats on. Map Item No, Qty, and Price once on the first product line. Upload creates one Line Items row per unique product (crates skipped).';
+          if (this.recipeTeach.colId && this.recipeTeach.line) {
+            return 'Keep this column selected. Click every product number in that PDF column (306810, 306806, 306805). Extra clicks add unique lines — they do not replace. Skip numbers ending in 15.';
           }
           if (this.recipeTeach.colId) {
             return this.undocked.docs || this.panelMode === 'docs'
               ? 'Now click that value on the PDF window.'
               : 'Now click that value on the PDF at the left.';
           }
-          return 'Open the PDF (Docs → Open file or Pop out), pick a column, then click the value.';
+          return 'Pick Line Items · Item No, then click each unique product number on the PDF.';
         }
       },
       watch: {
@@ -7396,7 +7411,7 @@
             this.currentTableId = ht.id;
             this.currentGroupId = ht.groupId;
           }
-          this.recipeTeach = { active: true, colId: '', line: false };
+          this.recipeTeach = { active: true, colId: '', line: !!this.recipeDraft.lineTableId };
           this.selectedRecipeId = this.recipeDraft.id;
           if (this.splitWidth < 46) this.splitWidth = 48;
           if (!this.activeDoc || this.activeDoc.kind !== 'pdf') {
@@ -7413,10 +7428,19 @@
         },
         onTeachColChange() {
           const col = this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
-          if (col) this.recipeHint = 'Click “' + col.name + '” on the PDF.';
+          if (!col) return;
+          if (col.teachRole === 'line') {
+            this.recipeTeach.line = true;
+            const lt = findTable(this.store, this.recipeDraft.lineTableId);
+            if (lt) { this.currentTableId = lt.id; this.currentGroupId = lt.groupId; }
+            this.recipeHint = 'Click each unique product number in that PDF column. Extra clicks add lines; they do not overwrite.';
+          } else {
+            this.recipeTeach.line = false;
+            this.recipeHint = 'Click “' + col.name + '” on the PDF (once for the whole order).';
+          }
         },
         onTeachLineToggle() {
-          this.recipeTeach.colId = '';
+          const keep = this.recipeTeach.colId;
           normalizeLineSkip(this.recipeDraft);
           normalizeLineUnique(this.recipeDraft);
           if (this.recipeTeach.line) {
@@ -7429,6 +7453,7 @@
               this.recipeTeach.line = false;
             }
           }
+          if (keep && this.teachColumns.some((c) => c.id === keep)) this.recipeTeach.colId = keep;
         },
         pdfItemStyle(it) {
           return {
@@ -7486,6 +7511,8 @@
             sample = sample.slice(lab.length).replace(/^[\s:]+/, '') || sample;
           }
           const mapCol = this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
+          const lineCol = !!(mapCol && mapCol.teachRole === 'line') || this.recipeTeach.line || (skuLikeSample(sample) && findColumn(findTable(this.store, this.recipeDraft.lineTableId), this.recipeTeach.colId));
+          if (lineCol) this.recipeTeach.line = true;
           let transform = guessTransform(sample);
           if (transform === 'number' && mapCol && (isLinkCol(mapCol) || mapCol.type === 'text' || mapCol.type === 'search' || /product|sku|customer/i.test(mapCol.name || ''))) {
             transform = 'text';
@@ -7493,7 +7520,7 @@
           const map = {
             id: uid('map'),
             columnId: this.recipeTeach.colId,
-            role: this.recipeTeach.line ? 'line' : 'header',
+            role: lineCol ? 'line' : 'header',
             page: page.num,
             nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh,
             sample,
@@ -7534,12 +7561,14 @@
             map.transform = 'text';
           }
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
-          const existing = this.recipeDraft.maps.find((m) => m.columnId === map.columnId && m.role === map.role);
-          if (existing && map.role === 'line' && samePdfColumn(existing, map)) {
-            if (!Array.isArray(existing.choices)) existing.choices = [];
+          const existing = this.recipeDraft.maps.find((m) => m.columnId === map.columnId);
+          const stackOnSameColumn = existing && (existing.role === 'line' || map.role === 'line' || skuLikeSample(sample) || skuLikeSample(existing.sample)) && (samePdfColumn(existing, map) || skuLikeSample(sample));
+          if (stackOnSameColumn) {
+            existing.role = 'line';
+            if (!Array.isArray(existing.choices)) existing.choices = existing.sample ? [{ sample: existing.sample, page: existing.page, nx: existing.nx, ny: existing.ny, nw: existing.nw, nh: existing.nh }] : [];
             const already = mapChoiceLabel(existing);
             if (already.indexOf(sample) >= 0) {
-              this.toast(sample + ' is already on this column.');
+              this.toast(sample + ' is already on this column. Unique so far: ' + already.join(', ') + '.');
               return;
             }
             if (recipeLineSkipped(this.recipeDraft, { [existing.columnId]: sample }, [sample])) {
@@ -7548,8 +7577,8 @@
             }
             existing.choices.push({ sample, page: page.num, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh });
             this.saveRecipe();
-            this.recipeHint = this.recipeMapColumnName(existing) + ' now has ' + mapChoiceLabel(existing).join(', ') + '. Same column — click more products, or pick Qty/Price.';
-            this.toast('Added ' + sample + ' on the same column. Unique products: ' + mapChoiceLabel(existing).join(', ') + '.');
+            this.recipeHint = this.recipeMapColumnName(existing) + ' now has ' + mapChoiceLabel(existing).join(', ') + '. Keep clicking products in this column.';
+            this.toast('Added ' + sample + '. Unique products on this column: ' + mapChoiceLabel(existing).join(', ') + '.');
             return;
           }
           if (existing) this.recipeDraft.maps = this.recipeDraft.maps.filter((m) => m !== existing);
@@ -7558,8 +7587,8 @@
           if (!this.recipeDraft.detect) this.recipeDraft.detect = sample;
           this.saveRecipe();
           if (map.role === 'line') {
-            this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. Keep this column selected and click the other product numbers in the same PDF column, or pick Qty/Price.';
-            this.toast('Mapped ' + sample + '. Click more unique products in this same column if you want — they will not overwrite.');
+            this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. Keep this column selected and click 306806, 306805, … in the same PDF column.';
+            this.toast('Mapped ' + sample + '. Click the other unique products now — they will be added, not replaced.');
           } else {
             this.recipeTeach.colId = '';
             this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
