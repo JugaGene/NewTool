@@ -425,7 +425,7 @@
                 </div>
                 <button v-if="canAddRows" class="text-[11px] rounded-md px-2 py-1 bg-teal text-ink-900 font-semibold" @click="addRecord()">+ Row</button>
                 <button class="text-[11px] rounded-md px-2 py-1 border border-line hover:bg-ink-700" @click="copySelected" :disabled="!selectedCellEntries().length">Copy</button>
-                <button class="text-[11px] rounded-md px-2 py-1 border border-line hover:bg-ink-700" @click="pasteFromClipboard" :disabled="!visibleColumns.length">Paste</button>
+                <button class="text-[11px] rounded-md px-2 py-1 border border-line hover:bg-ink-700" @click="pasteFromClipboard" :disabled="!currentTable">Paste</button>
                 <button class="text-[11px] rounded-md px-2 py-1 border border-line hover:bg-ink-700" @click="duplicateSelectedRows" :disabled="!selectedRecords.length">Duplicate</button>
                 <button class="text-[11px] rounded-md px-2 py-1 border border-line hover:bg-ink-700 text-red-300" @click="deleteSelected" :disabled="!selectedRecords.length && !selectedRecordId">Delete row</button>
                 <button v-if="mode==='architect'" class="text-[11px] rounded-md px-2 py-1 border border-line hover:bg-ink-700" @click="hideSelectedRow" :disabled="!selectedRecordId">Hide row</button>
@@ -449,9 +449,10 @@
                 </div>
                 <div v-else>
                   <div class="font-medium text-mist mb-1">This sheet has no columns yet</div>
-                  <p v-if="mode==='architect'">Add a column first. Rows can be entered after the sheet has fields.</p>
-                  <p v-else>An architect needs to add columns before anyone can add rows.</p>
+                  <p v-if="mode==='architect'">Add a column, or paste a block from Excel (headers in the first row). Then click a header to set type, lookup, or formula.</p>
+                  <p v-else>An architect needs to add columns before anyone can add rows. They can also paste headers from Excel.</p>
                   <button v-if="mode==='architect'" class="mt-3 rounded-lg bg-gold text-ink-900 font-semibold px-3 py-1.5" @click="openColumnEditor(null)">+ Column</button>
+                  <button v-if="mode==='architect'" class="mt-3 ml-2 rounded-lg border border-line px-3 py-1.5" @click="pasteFromClipboard">Paste from Excel</button>
                 </div>
               </div>
               <table v-else class="data-grid text-[13px]" :class="[selectingDrag && 'selecting', colMoving && 'moving-col', fillDrag && 'filling']" :style="{ width: gridTableWidth + 'px', minWidth: gridTableWidth + 'px', maxWidth: gridTableWidth + 'px' }">
@@ -480,6 +481,7 @@
                       :class="[dragOverColId===col.id && 'th-drop', isColSelected(col) && 'col-sel']"
                       :style="{ width: (col.width || 160) + 'px' }"
                       @mousedown="onHeaderMouseDown($event, col)"
+                      @dblclick.stop="mode==='architect' && openColumnEditor(col)"
                       @contextmenu.prevent="openCtxMenu($event, 'col', null, col)"
                       :title="'Click to select this column. Shift-click to extend. Drag the name to move the column. Drag the right edge to resize.'">
                       <div class="th-label">
@@ -1152,7 +1154,33 @@
       pushCell();
       if (row.length > 1 || (row.length === 1 && row[0] !== '')) pushRow();
       while (rows.length && rows[rows.length - 1].every((c) => c === '')) rows.pop();
+      const width = rows.reduce((w, r) => Math.max(w, r.length), 0);
+      rows.forEach((r) => { while (r.length < width) r.push(''); });
       return rows;
+    }
+    function looksLikeHeaderRow(row, body) {
+      const cells = (row || []).map((c) => String(c == null ? '' : c).trim());
+      const filled = cells.filter(Boolean);
+      if (!filled.length) return false;
+      const valueish = filled.filter((s) => /^-?\$?\d[\d,]*(\.\d+)?%?$/.test(s) || /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s) || /^\d{4}-\d{2}-\d{2}/.test(s)).length;
+      if (valueish / filled.length > 0.5) return false;
+      if (body && body.length) {
+        const firstBody = (body[0] || []).map((c) => String(c == null ? '' : c).trim()).filter(Boolean);
+        if (firstBody.length && firstBody.every((s, i) => s.toLowerCase() === String(filled[i] || '').toLowerCase())) return false;
+      }
+      return true;
+    }
+    function guessColumnType(values) {
+      const xs = (values || []).map((v) => String(v == null ? '' : v).trim()).filter(Boolean);
+      if (!xs.length) return 'text';
+      if (xs.every((s) => /^(yes|no|true|false|0|1|x|✓|checked|unchecked)$/i.test(s))) return 'checkbox';
+      if (xs.every((s) => /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s) || /^\d{4}-\d{2}-\d{2}/.test(s))) return 'date';
+      if (xs.every((s) => /%$/.test(s))) return 'percent';
+      if (xs.every((s) => /^\$/.test(s) || /^-?\$[\d,]+(\.\d+)?$/.test(s))) return 'currency';
+      if (xs.every((s) => /^-?[\d,]+(\.\d+)?$/.test(s))) return 'number';
+      if (xs.every((s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s))) return 'email';
+      if (xs.every((s) => /^https?:\/\//i.test(s))) return 'url';
+      return 'text';
     }
 
     function uid(prefix) {
@@ -3654,6 +3682,68 @@
             autofill: { linkColumnId: '', sourceColumnId: '' }
           };
         },
+        uniqueColName(name) {
+          const t = this.currentTable;
+          let base = String(name || '').trim() || 'Column';
+          base = base.replace(/\s+/g, ' ').slice(0, 80);
+          let n = base, i = 2;
+          while (t.columns.some((c) => c.name.toLowerCase() === n.toLowerCase())) {
+            n = base + ' ' + i;
+            i++;
+          }
+          return n;
+        },
+        addPastedColumn(name, type) {
+          const t = this.currentTable;
+          const col = this.blankColumn(type || 'text');
+          col.id = uid('col');
+          col.name = this.uniqueColName(name);
+          col.width = Math.max(120, Math.min(280, 40 + col.name.length * 8));
+          t.columns.push(col);
+          t.records.forEach((r) => {
+            if (!r.data) r.data = {};
+            if (r.data[col.id] === undefined) r.data[col.id] = col.type === 'checkbox' ? false : null;
+          });
+          this.audit('column.create', t.name + '.' + col.name, col.type);
+          return col;
+        },
+        ensurePasteColumns(startVis, needed, headers, dataRows) {
+          const visLen = this.visibleColumns.length;
+          let created = 0;
+          for (let j = 0; j < needed; j++) {
+            const idx = startVis + j;
+            if (idx < visLen) continue;
+            const samples = (dataRows || []).map((row) => row[j]);
+            const name = (headers && String(headers[j] || '').trim()) || ('Column ' + colIndexToLetter(this.currentTable.columns.length));
+            this.addPastedColumn(name, guessColumnType(samples));
+            created++;
+          }
+          return created;
+        },
+        ensurePasteRows(needed) {
+          let added = 0;
+          while (this.filteredRecords.length < needed) {
+            const rec = this.blankRecord();
+            this.currentTable.records.push(rec);
+            added++;
+          }
+          return added;
+        },
+        excelPasteUsesHeaders(grid, r0, c0) {
+          if (!grid.length) return false;
+          const header = grid[0];
+          const body = grid.slice(1);
+          if (!looksLikeHeaderRow(header, body)) return false;
+          if (!this.currentTable.columns.length) return true;
+          const vis = this.visibleColumns;
+          const names = vis.map((c) => c.name.toLowerCase());
+          const hits = header.filter((h) => h && names.indexOf(String(h).trim().toLowerCase()) >= 0).length;
+          const filled = header.filter((h) => String(h || '').trim()).length;
+          if (filled && hits >= Math.ceil(filled * 0.6)) return true;
+          if (this.mode === 'architect' && r0 === 0 && c0 === 0 && !this.currentTable.records.length) return true;
+          if (this.mode === 'architect' && r0 === 0 && c0 === 0 && body.length && vis.length < header.length) return true;
+          return false;
+        },
         openColumnEditor(col) {
           if (this.mode !== 'architect') return;
           const draft = col ? clone(Object.assign(this.blankColumn(col.type), col)) : this.blankColumn('text');
@@ -4782,9 +4872,8 @@
         },
         pasteGrid(text) {
           if (this.view !== 'grid' || !this.currentTable) return;
-          const rows = this.filteredRecords;
-          const cols = this.visibleColumns;
-          if (!rows.length || !cols.length) return this.toast('Nothing to paste into.', 'warn');
+          let rows = this.filteredRecords;
+          let cols = this.visibleColumns;
           const cells = this.selectedCellEntries();
           let r0 = rows.findIndex((r) => r.id === (this.selectedCell && this.selectedCell.recId));
           let c0 = cols.findIndex((c) => c.id === (this.selectedCell && this.selectedCell.colId));
@@ -4802,6 +4891,7 @@
             ? this._clipPayload
             : null;
           if (payload && payload.grid && payload.grid.length) {
+            if (!rows.length || !cols.length) return this.toast('Nothing to paste into.', 'warn');
             const srcR = payload.grid.length;
             const srcC = payload.grid[0].length;
             const one = srcR === 1 && srcC === 1;
@@ -4827,10 +4917,9 @@
           }
           const grid = parseClipboardGrid(text);
           if (!grid.length) return;
-          const srcR = grid.length;
           const srcC = Math.max.apply(null, grid.map((row) => row.length));
-          const one = srcR === 1 && srcC === 1;
-          if (one && recIds.length * colIds.length > 1) {
+          const one = grid.length === 1 && srcC === 1;
+          if (one && recIds.length * colIds.length > 1 && cols.length) {
             let n = 0, skip = 0;
             cells.forEach(({ rec, col }) => {
               const parsed = this.coercePasteValue(col, grid[0][0]);
@@ -4841,20 +4930,35 @@
             this.toast(n ? ('Pasted into ' + n + ' cell' + (n === 1 ? '' : 's') + (skip ? ' · ' + skip + ' skipped' : '')) : 'Those cells could not be pasted into.', n ? undefined : 'warn');
             return;
           }
+          const useHeaders = this.excelPasteUsesHeaders(grid, r0, c0);
+          const header = grid[0];
+          const body = useHeaders ? grid.slice(1) : grid;
+          if (!this.currentTable.columns.length && this.mode !== 'architect') {
+            return this.toast('Switch to Architect Mode to paste Excel headers into a new sheet.', 'warn');
+          }
+          let created = 0;
+          if (this.mode === 'architect') {
+            created = this.ensurePasteColumns(c0, srcC, useHeaders ? header : null, body);
+          }
+          this.ensurePasteRows(r0 + Math.max(body.length, useHeaders ? 0 : 1));
+          rows = this.filteredRecords;
+          cols = this.visibleColumns;
+          if (!cols.length) return this.toast('Nothing to paste into.', 'warn');
           let n = 0, skip = 0;
-          for (let i = 0; i < grid.length; i++) {
+          for (let i = 0; i < body.length; i++) {
             const rec = rows[r0 + i];
-            if (!rec) { skip += grid[i].length; continue; }
-            for (let j = 0; j < grid[i].length; j++) {
+            if (!rec) { skip += body[i].length; continue; }
+            for (let j = 0; j < body[i].length; j++) {
               const col = cols[c0 + j];
               if (!col) { skip++; continue; }
-              const parsed = this.coercePasteValue(col, grid[i][j]);
+              const parsed = this.coercePasteValue(col, body[i][j]);
               if (parsed.skip) { skip++; continue; }
               if (this.setCell(rec, col, parsed.value, true)) n++;
               else skip++;
             }
           }
-          this.toast(n ? ('Pasted ' + n + ' cell' + (n === 1 ? '' : 's') + (skip ? ' · ' + skip + ' skipped' : '')) : 'Nothing was pasted.', n ? undefined : 'warn');
+          const extra = created ? (' · ' + created + ' column' + (created === 1 ? '' : 's') + ' added — double-click a header to set type') : '';
+          this.toast(n || created ? ('Pasted ' + n + ' cell' + (n === 1 ? '' : 's') + extra + (skip ? ' · ' + skip + ' skipped' : '')) : 'Nothing was pasted.', (n || created) ? undefined : 'warn');
         },
         copyRecord(rec) {
           const t = this.currentTable;
@@ -5418,6 +5522,11 @@
           if (!dates || formatDateDMY(dates[0]) !== '02/01/2026') console.warn('fill series dates failed', dates);
           const labels = fillSeriesExtra(['Item1', 'Item2'], 1);
           if (!labels || labels[0] !== 'Item3') console.warn('fill series textnum failed', labels);
+          if (!looksLikeHeaderRow(['Name', 'Qty'], [['Acme', '2']])) console.warn('excel header row not detected');
+          if (looksLikeHeaderRow(['1', '2'], [['3', '4']])) console.warn('numeric first row should not be headers');
+          if (guessColumnType(['1', '2', '3']) !== 'number') console.warn('guess number type failed');
+          if (guessColumnType(['01/01/2026', '02/01/2026']) !== 'date') console.warn('guess date type failed');
+          if (guessColumnType(['a@b.com']) !== 'email') console.warn('guess email type failed');
         },
         onPaste(e) {
           const target = e.target;
