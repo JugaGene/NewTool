@@ -2620,19 +2620,70 @@
       return tx.some((t) => ty.indexOf(t) >= 0);
     }
 
+    function valuesEqualNeedle(needle, shown, stored) {
+      const n = String(needle == null ? '' : needle).trim();
+      const a = String(shown == null ? '' : shown).trim();
+      const b = stored == null ? '' : String(stored).trim();
+      if (!n) return false;
+      if (a.toLowerCase() === n.toLowerCase() || b.toLowerCase() === n.toLowerCase()) return true;
+      if (/^\d+(\.0+)?$/.test(n)) {
+        const num = Number(n);
+        if (Number.isFinite(num) && (Number(stored) === num || Number(shown) === num)) return true;
+      }
+      return false;
+    }
+
+    function scanTableForNeedle(store, table, needle) {
+      const n = String(needle == null ? '' : needle).trim();
+      if (!n || !table) return null;
+      const exact = [];
+      (table.records || []).forEach((r) => {
+        (table.columns || []).forEach((c) => {
+          if (valuesEqualNeedle(n, formatDisplay(store, table, r, c), rawStored(r, c))) {
+            if (exact.indexOf(r) < 0) exact.push(r);
+          }
+        });
+      });
+      if (exact.length === 1) return exact[0];
+      if (exact.length > 1) return null;
+      const fuzzy = (table.records || []).filter((r) => (table.columns || []).some((c) => (
+        recipeTextMatch(n, formatDisplay(store, table, r, c), 'contains') || recipeTextMatch(n, rawStored(r, c), 'contains')
+      )));
+      return fuzzy.length === 1 ? fuzzy[0] : null;
+    }
+
+    function tableForColumnHint(store, col) {
+      if (!col) return null;
+      if (isLinkCol(col)) return findTable(store, col.link && col.link.tableId);
+      const n = String(col.name || '').toLowerCase();
+      const tables = store.tables || [];
+      if (/product|sku|item|vare/.test(n) && !/qty|qty|antal/.test(n)) return tables.find((t) => /product|vare/i.test(t.name)) || null;
+      if (/customer|kunde|client/.test(n) && !/ref|po|ordre|order/.test(n)) return tables.find((t) => /customer|kunde/i.test(t.name)) || null;
+      return null;
+    }
+
+    function displayNameOfRecord(store, table, rec) {
+      const nameCol = (table.columns || []).find((c) => /^(name|navn|title|product)$/i.test(c.name)) || (table.columns || []).find((c) => /name|navn/i.test(c.name));
+      const col = nameCol || table.columns[0];
+      return col ? formatDisplay(store, table, rec, col) : '';
+    }
+
     function findRecipeLookupRow(store, field, raw) {
       if (!field || (field.fill && field.fill !== 'lookup') || !field.lookup || !field.lookup.tableId) return null;
       const table = findTable(store, field.lookup.tableId);
       if (!table) return null;
-      const matchCol = findColumn(table, field.lookup.matchColumnId);
-      if (!matchCol) return null;
       const needle = String(raw == null ? '' : raw).trim();
+      const matchCol = findColumn(table, field.lookup.matchColumnId);
       const mode = field.lookup.match || 'contains';
-      return table.records.find((r) => {
-        const shown = formatDisplay(store, table, r, matchCol);
-        const stored = rawStored(r, matchCol);
-        return recipeTextMatch(needle, shown, mode) || recipeTextMatch(needle, stored, mode);
-      }) || null;
+      if (matchCol) {
+        const hit = table.records.find((r) => {
+          const shown = formatDisplay(store, table, r, matchCol);
+          const stored = rawStored(r, matchCol);
+          return recipeTextMatch(needle, shown, mode) || recipeTextMatch(needle, stored, mode) || valuesEqualNeedle(needle, shown, stored);
+        });
+        if (hit) return hit;
+      }
+      return scanTableForNeedle(store, table, needle);
     }
 
     function resolveRecipeFill(store, field, raw) {
@@ -2665,6 +2716,8 @@
       const lt = findTable(store, col.link && col.link.tableId);
       if (!lt) return '';
       if (lt.records.some((r) => r.id === needle)) return needle;
+      const scanned = scanTableForNeedle(store, lt, needle);
+      if (scanned) return scanned.id;
       const dc = findColumn(lt, col.link.displayColumnId) || lt.columns[0];
       const exact = dc && lt.records.find((r) => String(formatDisplay(store, lt, r, dc)).toLowerCase() === needle.toLowerCase());
       if (exact) return exact.id;
@@ -2685,7 +2738,20 @@
 
     function coerceRecipeCell(store, col, field, raw) {
       let val = resolveRecipeFill(store, field, raw);
-      if (col && isLinkCol(col)) val = matchLinkedRecord(store, col, val);
+      if (col && isLinkCol(col)) {
+        val = matchLinkedRecord(store, col, val);
+        return val;
+      }
+      const fill = (field && field.fill) || 'pdf';
+      if (fill === 'pdf' && col && val !== '' && val != null) {
+        const t = tableForColumnHint(store, col);
+        const hit = t && scanTableForNeedle(store, t, val);
+        if (hit) {
+          if (/sku|item\s*no|varenr|ean|code/i.test(col.name || '')) return val;
+          const name = displayNameOfRecord(store, t, hit);
+          if (name) return name;
+        }
+      }
       return val;
     }
 
@@ -2769,6 +2835,15 @@
       const page = pages[(map.page || 1) - 1];
       if (!page) return '';
       const items = page.items || [];
+      const sample = String(map.sample || '').trim();
+      if (sample) {
+        const same = items.filter((it) => String(it.str || '').replace(/\s+/g, ' ').trim() === sample);
+        if (same.length === 1) return sample;
+        if (same.length > 1) {
+          const hit = nearestPdfItem(same, map.nx + map.nw / 2, map.ny + map.nh / 2, 1, 1);
+          if (hit) return String(hit.str).trim();
+        }
+      }
       const label = String(map.label || '').trim();
       if (label) {
         const labs = items.filter((it) => String(it.str).replace(/\s+/g, ' ').trim().toLowerCase() === label.toLowerCase());
@@ -6617,6 +6692,10 @@
             sample = sample.slice(lab.length).replace(/^[\s:]+/, '') || sample;
           }
           const mapCol = this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
+          let transform = guessTransform(sample);
+          if (transform === 'number' && mapCol && (isLinkCol(mapCol) || mapCol.type === 'text' || mapCol.type === 'search' || /product|sku|customer/i.test(mapCol.name || ''))) {
+            transform = 'text';
+          }
           const map = {
             id: uid('map'),
             columnId: this.recipeTeach.colId,
@@ -6625,15 +6704,30 @@
             nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh,
             sample,
             label: lab,
-            transform: guessTransform(sample),
+            transform,
             fill: isLinkCol(mapCol) ? 'lookup' : 'pdf'
           };
+          const hintTable = tableForColumnHint(this.store, mapCol);
           if (isLinkCol(mapCol) && mapCol.link) {
+            const lt = findTable(this.store, mapCol.link.tableId);
+            const skuCol = lt && /^\d+$/.test(sample) && (lt.columns || []).find((c) => /sku|item\s*no|ean|varenr|code/i.test(c.name));
             map.lookup = {
               tableId: mapCol.link.tableId,
-              matchColumnId: mapCol.link.searchColumnId || mapCol.link.matchColumnId || mapCol.link.displayColumnId,
+              matchColumnId: (skuCol && skuCol.id) || mapCol.link.searchColumnId || mapCol.link.matchColumnId || mapCol.link.displayColumnId,
               out: 'link',
-              match: 'contains',
+              match: /^\d+$/.test(sample) ? 'equals' : 'contains',
+              also: []
+            };
+            map.fill = 'lookup';
+          } else if (hintTable && /product|customer|sku|item/i.test(mapCol.name || '')) {
+            const skuCol = /^\d+$/.test(sample) && (hintTable.columns || []).find((c) => /sku|item\s*no|ean|varenr|code/i.test(c.name));
+            const nameCol = (hintTable.columns || []).find((c) => /name|navn/i.test(c.name));
+            map.fill = 'lookup';
+            map.lookup = {
+              tableId: hintTable.id,
+              matchColumnId: (skuCol && skuCol.id) || (nameCol && nameCol.id) || (hintTable.columns[0] && hintTable.columns[0].id),
+              out: isLinkCol(mapCol) ? 'link' : ((nameCol && nameCol.id) || 'link'),
+              match: /^\d+$/.test(sample) ? 'equals' : 'contains',
               also: []
             };
           } else {
@@ -6853,6 +6947,9 @@
               const raw = click.header[colId];
               const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
               if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
+              else if (col && raw !== '' && raw != null && (isLinkCol(col) || /product|customer|sku/i.test(col.name || ''))) {
+                this.toast(col.name + ': no match for “' + raw + '”. Add that SKU/name on Products/Customers, or set lookup on the click.', 'warn');
+              }
               if (map) this.applyRecipeLookupAlso(headerTable, rec, map, raw);
             });
             if (recipe.statusColumnId && recipe.statusValue) {
@@ -7178,6 +7275,11 @@
           const custCol = ord.columns.find((c) => c.name === 'Customer');
           if (matchLinkedRecord(lkWs, custCol, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('search column PDF match failed');
           if (coerceRecipeCell(lkWs, custCol, { fill: 'pdf' }, 'REMA Grønt') !== 'rec_cust_rema') console.warn('coerce search cell failed');
+          const linesT = lkWs.tables.find((x) => x.name === 'Line Items');
+          const lineProdCol = linesT.columns.find((c) => c.name === 'Product');
+          if (matchLinkedRecord(lkWs, lineProdCol, '306832') !== 'rec_prod_snaps') console.warn('product SKU link match failed');
+          const fakeProd = { name: 'Product', type: 'text' };
+          if (String(coerceRecipeCell(lkWs, fakeProd, { fill: 'pdf' }, '306832')).toLowerCase().indexOf('sugar') < 0) console.warn('product SKU should fill product name');
           const spec = snapshotCellRule(cust2.records[0], city2);
           spec.rule.formula = { expression: 'XLOOKUP(C1, "Products", "Item No", "Name")', resultType: 'auto' };
           const shifted = shiftA1InText(spec.rule.formula.expression, 1, 0);
