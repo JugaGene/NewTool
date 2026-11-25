@@ -275,6 +275,14 @@
           <input type="checkbox" v-model="recipeTeach.line" class="accent-ink-900" @change="onTeachLineToggle" />
           Repeats on each line
         </label>
+        <label v-if="recipeTeach.line && recipeDraft.lineSkip" class="inline-flex items-center gap-1 text-[12px]">
+          <input type="checkbox" v-model="recipeDraft.lineSkip.enabled" class="accent-ink-900" @change="saveRecipe" />
+          Skip crate / box lines
+        </label>
+        <span v-if="recipeTeach.line && recipeDraft.lineSkip && recipeDraft.lineSkip.enabled && recipeDraft.lineSkip.rules[0]" class="inline-flex items-center gap-1 text-[12px]">
+          ending with
+          <input v-model.trim="recipeDraft.lineSkip.rules[0].value" class="w-14 rounded-md bg-ink-900 text-mist px-1 py-0.5 font-mono" placeholder="15" @change="saveRecipe" />
+        </span>
         <span class="opacity-80">{{ teachHintText }}</span>
         <button v-if="!panelMode && !undocked.docs" class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="popOutPanel('docs')">Move to other monitor</button>
         <button class="ml-auto rounded-md bg-ink-900 text-gold px-2 py-1 text-[12px] font-semibold" @click="saveRecipe">Save recipe</button>
@@ -987,7 +995,7 @@
             </div>
             <div>
               <div class="text-sm font-medium mb-1">Clicked on the PDF</div>
-              <p class="text-[12px] text-mute mb-2">After a click, choose what to do with that value: keep the PDF text, look it up and <strong class="text-mist">link</strong> a row, copy another field from that row, or type a fixed value.</p>
+              <p class="text-[12px] text-mute mb-2">After a click, choose what to do with that value: keep the PDF text, look it up and <strong class="text-mist">link</strong> a row, copy another field from that row, or type a fixed value. Maps marked <strong class="text-mist">each line</strong> are read once on the first product row, then again on every later product row — so 360, 1.344 and 720 become three different Qty cells, not one copied value.</p>
               <p v-if="!(recipeDraft.maps && recipeDraft.maps.length)" class="text-[12px] text-mute mb-2">Nothing clicked yet. Open a PDF with Docs, then Teach on PDF.</p>
               <div v-for="(m, i) in (recipeDraft.maps || [])" :key="m.id" class="rounded-lg border border-line p-2 mb-2 space-y-2 text-sm">
                 <div class="flex flex-wrap items-center gap-2">
@@ -1114,6 +1122,32 @@
                   </template>
                   <button v-if="mode==='architect'" class="text-[11px] text-red-300 sm:col-span-2 text-left" @click="recipeDraft.headerFields.splice(i,1)">Remove field</button>
                 </div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-line p-2 space-y-2">
+              <label class="flex items-center gap-2 text-sm">
+                <input type="checkbox" class="accent-teal" v-model="recipeDraft.lineSkip.enabled" :disabled="mode!=='architect'" />
+                Skip extra lines (crates / boxes)
+              </label>
+              <p class="text-[11px] text-mute">On a REMA købsordre, product numbers like 306810 are real lines. 379015 (ends with 15) is the Europool crate — leave those out. Each remaining number becomes its own Line Items row.</p>
+              <div v-if="recipeDraft.lineSkip && recipeDraft.lineSkip.enabled" class="space-y-2">
+                <label class="text-[11px] text-mute block">Test this mapped column (blank = any value on the line)
+                  <select v-model="recipeDraft.lineSkip.columnId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-2 py-1 text-[12px] text-mist" :disabled="mode!=='architect'">
+                    <option value="">any value on the line</option>
+                    <option v-for="c in recipeLineColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
+                  </select>
+                </label>
+                <div v-for="(rule, ri) in recipeDraft.lineSkip.rules" :key="ri" class="flex flex-wrap gap-1 items-center">
+                  <select v-model="rule.op" class="rounded-md bg-ink-900 border border-line px-1 py-1 text-[12px]" :disabled="mode!=='architect'">
+                    <option value="endsWith">ends with</option>
+                    <option value="equals">equals</option>
+                    <option value="contains">contains</option>
+                    <option value="startsWith">starts with</option>
+                  </select>
+                  <input v-model.trim="rule.value" class="flex-1 min-w-[6rem] rounded-md bg-ink-900 border border-line px-2 py-1 font-mono text-[12px]" placeholder="15" :disabled="mode!=='architect'" />
+                  <button v-if="mode==='architect'" type="button" class="text-[11px] text-red-300" @click="recipeDraft.lineSkip.rules.splice(ri,1)">Remove</button>
+                </div>
+                <button v-if="mode==='architect'" type="button" class="text-[12px] text-teal" @click="addLineSkipRule">+ Skip rule</button>
               </div>
             </div>
             <label class="block text-sm">Line-item regex (optional)
@@ -1626,6 +1660,7 @@
         if (!Array.isArray(r.lineFields)) r.lineFields = [];
         if (!Array.isArray(r.maps)) r.maps = [];
         if (r.detect == null) r.detect = '';
+        normalizeLineSkip(r);
       });
       return store;
     }
@@ -2587,6 +2622,7 @@
           { id: 'hf_cust', label: 'Customer', regex: '(REMA Distribution Danmark|REMA Grønt)', group: 1, columnId: o.cust, transform: 'text', fill: 'lookup', lookup: { tableId: 'tbl_customers', matchColumnId: 'col_c_name', out: 'link', match: 'contains' } },
           { id: 'hf_status', label: 'Status', regex: '', group: 1, columnId: o.status, transform: 'text', fill: 'fixed', fixed: 'Draft' }
         ],
+        lineSkip: { enabled: true, columnId: l.notes, rules: [{ op: 'endsWith', value: '15' }] },
         lineRegex: '(\\d{6})\\s+(.+?)\\s+(\\d+)\\s+(Ks\\.|Kolli|Kg|Stk)\\s+([\\d.]+,\\d{2})',
         lineFields: [
           { group: 1, columnId: l.notes, transform: 'text', label: 'Item number', fill: 'pdf' },
@@ -2664,6 +2700,77 @@
         return transformRecipeValue(token, field.transform);
       }
       return '';
+    }
+
+    function emptyLineSkip() {
+      return { enabled: false, columnId: '', rules: [{ op: 'endsWith', value: '15' }] };
+    }
+
+    function normalizeLineSkip(recipe) {
+      if (!recipe) return emptyLineSkip();
+      const src = recipe.lineSkip || {};
+      const rules = Array.isArray(src.rules) && src.rules.length
+        ? src.rules.map((r) => ({
+          op: r && r.op ? r.op : 'endsWith',
+          value: r && r.value != null ? String(r.value) : ''
+        }))
+        : [{ op: 'endsWith', value: '15' }];
+      recipe.lineSkip = {
+        enabled: !!src.enabled,
+        columnId: src.columnId || '',
+        rules
+      };
+      return recipe.lineSkip;
+    }
+
+    function lineSkipNeedle(v) {
+      return String(v == null ? '' : v).replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    function lineSkipRuleHits(value, rule) {
+      if (!rule) return false;
+      const hay = lineSkipNeedle(value);
+      const want = lineSkipNeedle(rule.value);
+      if (!hay || !want) return false;
+      const op = rule.op || 'endsWith';
+      const h = hay.toLowerCase();
+      const w = want.toLowerCase();
+      if (op === 'equals') return h === w;
+      if (op === 'contains') return h.indexOf(w) >= 0;
+      if (op === 'startsWith') return h.indexOf(w) === 0;
+      const compact = hay.replace(/[\s.]/g, '');
+      return compact.toLowerCase().slice(-want.length) === w || h.slice(-w.length) === w;
+    }
+
+    function lineSkipTestValues(recipe, row, extraTokens) {
+      const skip = recipe && recipe.lineSkip;
+      const vals = [];
+      const add = (v) => {
+        const s = lineSkipNeedle(v);
+        if (s && vals.indexOf(s) < 0) vals.push(s);
+      };
+      if (skip && skip.columnId && row && row[skip.columnId] != null && row[skip.columnId] !== '') {
+        add(row[skip.columnId]);
+      } else if (row) {
+        Object.keys(row).forEach((k) => add(row[k]));
+      }
+      (extraTokens || []).forEach(add);
+      return vals;
+    }
+
+    function recipeLineSkipped(recipe, row, extraTokens) {
+      const skip = recipe && recipe.lineSkip;
+      if (!skip || !skip.enabled) return false;
+      const rules = (skip.rules || []).filter((r) => lineSkipNeedle(r && r.value));
+      if (!rules.length) return false;
+      const vals = lineSkipTestValues(recipe, row, extraTokens);
+      if (!vals.length) return false;
+      return rules.some((rule) => vals.some((v) => lineSkipRuleHits(v, rule)));
+    }
+
+    function itemsOnPdfLine(items, y, tol) {
+      const band = tol == null ? 0.012 : tol;
+      return (items || []).filter((it) => Math.abs((it.ny + it.nh / 2) - y) <= band);
     }
 
     function extractRecipeLines(text, recipe) {
@@ -3110,11 +3217,15 @@
       const lineMaps = maps.filter((m) => m.role === 'line');
       const lines = [];
       if (lineMaps.length) {
-        const page = pages[(lineMaps[0].page || 1) - 1];
+        const skuMap = lineMaps.find((m) => /^\d{4,}$/.test(String(m.sample || '').replace(/[\s.]/g, '')));
+        const m0 = skuMap || lineMaps[0];
+        const page = pages[(m0.page || 1) - 1];
         const items = (page && page.items) || [];
-        const m0 = lineMaps[0];
         const cx0 = m0.nx + m0.nw / 2;
-        const hits = items.filter((it) => Math.abs((it.nx + it.nw / 2) - cx0) < 0.04 && String(it.str).trim());
+        const sample = String(m0.sample || '').trim();
+        const skuAnchor = /^\d{4,}$/.test(sample.replace(/[\s.]/g, ''));
+        let hits = items.filter((it) => Math.abs((it.nx + it.nw / 2) - cx0) < 0.04 && String(it.str).trim());
+        if (skuAnchor) hits = hits.filter((it) => /^\d{4,}$/.test(String(it.str || '').replace(/[\s.]/g, '')));
         const clusters = [];
         hits.map((it) => it.ny + it.nh / 2).sort((a, b) => a - b).forEach((y) => {
           const last = clusters[clusters.length - 1];
@@ -3135,7 +3246,10 @@
             row[m.columnId] = val;
             filled += 1;
           });
-          if (filled) lines.push(row);
+          if (!filled) return;
+          const extras = itemsOnPdfLine(items, c.y).map((it) => it.str);
+          if (recipeLineSkipped(recipe, row, extras)) return;
+          lines.push(row);
         });
       }
       return { header, lines };
@@ -3146,12 +3260,16 @@
       (recipe.headerFields || []).forEach((f) => {
         header[f.id || f.label] = { label: f.label, columnId: f.columnId, value: recipeFieldValue(text, f) };
       });
-      const lines = extractRecipeLines(text, recipe).map((m) => {
+      const lines = [];
+      extractRecipeLines(text, recipe).forEach((m) => {
         const data = {};
         (recipe.lineFields || []).forEach((f) => {
           data[f.columnId || ('g' + f.group)] = transformRecipeValue(m[f.group], f.transform);
         });
-        return data;
+        const extras = [];
+        for (let i = 0; i < m.length; i++) extras.push(m[i]);
+        if (recipeLineSkipped(recipe, data, extras)) return;
+        lines.push(data);
       });
       return { header, lines };
     }
@@ -4234,6 +4352,12 @@
           return !this.undocked.recipes;
         },
         teachHintText() {
+          if (this.recipeTeach.line) {
+            if (this.recipeTeach.colId) {
+              return 'Click that value on the first product line only (not the Europool row). Qty and price on later products are read from the same columns.';
+            }
+            return 'Keep Repeats on. Map Item No, then Qty, then Price — always on the first product line. Each PDF product row becomes its own Line Items row with that row’s quantity.';
+          }
           if (this.recipeTeach.colId) {
             return this.undocked.docs || this.panelMode === 'docs'
               ? 'Now click that value on the PDF window.'
@@ -7031,13 +7155,20 @@
             headerFields: [{ id: uid('hf'), label: 'Order number', regex: '', group: 1, columnId: '', transform: 'text', fill: 'pdf', lookup: emptyRecipeLookup() }],
             lineRegex: '',
             lineFields: [],
-            maps: []
+            maps: [],
+            lineSkip: emptyLineSkip()
           };
         },
         newRecipe() { this.recipeDraft = this.freshRecipe(); },
+        addLineSkipRule() {
+          if (!this.recipeDraft.lineSkip) this.recipeDraft.lineSkip = emptyLineSkip();
+          if (!this.recipeDraft.lineSkip.rules) this.recipeDraft.lineSkip.rules = [];
+          this.recipeDraft.lineSkip.rules.push({ op: 'contains', value: '' });
+        },
         editRecipe(r) {
           this.recipeDraft = clone(r);
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
+          normalizeLineSkip(this.recipeDraft);
           (this.recipeDraft.headerFields || []).forEach((f) => {
             if (!f.fill) f.fill = 'pdf';
             if (!f.lookup) f.lookup = emptyRecipeLookup();
@@ -7067,6 +7198,7 @@
           if (this.mode !== 'architect') return this.requestArchitect();
           if (!this.recipeDraft.id) return;
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
+          normalizeLineSkip(this.recipeDraft);
           this.saveRecipe();
           if (this.panelMode !== 'recipes') this.recipeOpen = false;
           if (!this.undocked.docs && this.panelMode !== 'docs') this.splitOpen = true;
@@ -7097,6 +7229,7 @@
         },
         onTeachLineToggle() {
           this.recipeTeach.colId = '';
+          normalizeLineSkip(this.recipeDraft);
           if (this.recipeTeach.line) {
             const lt = findTable(this.store, this.recipeDraft.lineTableId);
             if (lt) {
@@ -7192,8 +7325,13 @@
           if (!this.recipeDraft.detect) this.recipeDraft.detect = sample;
           this.saveRecipe();
           this.recipeTeach.colId = '';
-          this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
-          this.toast('Mapped ' + sample + ' → column.');
+          if (map.role === 'line') {
+            this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + ' on every product line. Next: pick Qty or Price, still with Repeats on, and click it on the same first product line.';
+            this.toast('Each product row will get its own ' + this.recipeMapColumnName(map) + ' (this line was ' + sample + ').');
+          } else {
+            this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
+            this.toast('Mapped ' + sample + ' → column.');
+          }
         },
         async parsePdfPages(doc) {
           if (!doc || !window.pdfjsLib) return [];
@@ -7336,9 +7474,16 @@
           try {
             if (!doc.text) doc.text = await this.readDocText(doc);
             const extracted = runRecipeExtract(doc.text, this.recipeDraft);
-            const lines = extracted.lines.map((row, i) => 'Line ' + (i + 1) + ': ' + JSON.stringify(row)).join('\n');
+            let click = { header: {}, lines: [] };
+            if ((this.recipeDraft.maps || []).length && doc.kind === 'pdf') {
+              const pages = await this.parsePdfPages(doc);
+              click = extractFromMaps(pages, this.recipeDraft);
+            }
+            const lineRows = click.lines.length ? click.lines : extracted.lines;
+            const lines = lineRows.map((row, i) => 'Line ' + (i + 1) + ': ' + JSON.stringify(row)).join('\n');
             const heads = Object.values(extracted.header).map((h) => (h.label || 'field') + ': ' + (h.value === '' ? '(empty)' : h.value)).join('\n');
-            this.recipePreview = (doc.text || '(no text)') + '\n\n— mapped —\n' + heads + (lines ? '\n' + lines : '\n(no line items)');
+            const clickHeads = Object.keys(click.header).map((k) => k + ': ' + click.header[k]).join('\n');
+            this.recipePreview = (doc.text || '(no text)') + '\n\n— mapped —\n' + heads + (clickHeads ? '\n' + clickHeads : '') + (lines ? '\n' + lines : '\n(no line items)');
           } catch (e) {
             this.recipePreview = 'Could not read this file.';
           }
@@ -7536,8 +7681,7 @@
                 });
               });
             } else if (lineTable && extracted.lines.length) {
-              const matches = extractRecipeLines(doc.text, recipe);
-              matches.forEach((m) => {
+              extracted.lines.forEach((row) => {
                 const lr = this.blankRecord(lineTable);
                 lineTable.records.push(lr);
                 if (recipe.lineLinkColumnId) {
@@ -7547,7 +7691,7 @@
                 (recipe.lineFields || []).forEach((f) => {
                   const col = this.recipeCol(lineTable, f.columnId);
                   if (!col) return;
-                  const raw = f.fill === 'fixed' ? f.fixed : transformRecipeValue(m[f.group], f.transform);
+                  const raw = f.fill === 'fixed' ? f.fixed : row[f.columnId || ('g' + f.group)];
                   const val = coerceRecipeCell(this.store, col, f, raw);
                   if (this.recipeWriteCell(lineTable, lr, col, val)) filled += 1;
                 });
@@ -7812,9 +7956,34 @@
           const got = runRecipeExtract(remTxt, remR);
           const po = Object.values(got.header).find((h) => h.label === 'Order number');
           if (!po || po.value !== 'KO428144') console.warn('Rema order number extract failed', got.header);
-          if (got.lines.length !== 2) console.warn('Rema line extract failed', got.lines);
+          if (got.lines.length !== 1) console.warn('Rema line extract failed (crate 379015 should be skipped)', got.lines);
           if (got.lines[0].col_l_qty !== 192) console.warn('Rema qty extract failed', got.lines[0]);
           if (got.lines[0].col_l_price !== 73.5) console.warn('Rema price extract failed', got.lines[0]);
+          if (String(got.lines[0].col_l_notes) === '379015') console.warn('crate line was kept');
+          const multiTxt = '306810 Ærter Danske 500gr. 360 Ks. 115,00 41.400,00\n379015 Europool kasse - grønt 360 Kolli 28,75 10.350,00\n306806 Sugar Snaps, DK 1344 Ks. 73,50 98.784,00\n379015 Europool kasse - grønt 1344 Kolli 28,75 38.640,00\n306805 Ærter Løse, DK 720 Ks. 114,00 82.080,00\n379015 Europool kasse - grønt 720 Kolli 28,75 20.700,00';
+          const multi = runRecipeExtract(multiTxt, remR);
+          if (multi.lines.length !== 3) console.warn('KO421268-style lines should be 3 products, not crates', multi.lines);
+          const nos = multi.lines.map((row) => String(row.col_l_notes));
+          if (nos.join(',') !== '306810,306806,306805') console.warn('product numbers order failed', nos);
+          const crateOn = { ...emptyLineSkip(), enabled: true, rules: [{ op: 'endsWith', value: '15' }] };
+          if (!recipeLineSkipped({ lineSkip: crateOn }, { sku: '379015' })) console.warn('endsWith 15 skip failed');
+          if (recipeLineSkipped({ lineSkip: crateOn }, { sku: '306810' })) console.warn('306810 should not skip');
+          const clickLines = extractFromMaps([{ num: 1, items: [
+            { str: '306810', nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02 },
+            { str: '360', nx: 0.4, ny: 0.20, nw: 0.05, nh: 0.02 },
+            { str: '379015', nx: 0.1, ny: 0.26, nw: 0.08, nh: 0.02 },
+            { str: '360', nx: 0.4, ny: 0.26, nw: 0.05, nh: 0.02 },
+            { str: '306806', nx: 0.1, ny: 0.32, nw: 0.08, nh: 0.02 },
+            { str: '1344', nx: 0.4, ny: 0.32, nw: 0.05, nh: 0.02 }
+          ] }], {
+            maps: [
+              { role: 'line', columnId: 'sku', page: 1, nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02, sample: '306810', transform: 'text' },
+              { role: 'line', columnId: 'qty', page: 1, nx: 0.4, ny: 0.20, nw: 0.05, nh: 0.02, sample: '360', transform: 'number' }
+            ],
+            lineSkip: { enabled: true, rules: [{ op: 'endsWith', value: '15' }] }
+          });
+          if (clickLines.lines.length !== 2 || clickLines.lines.some((r) => String(r.sku).slice(-2) === '15')) console.warn('click map crate skip failed', clickLines.lines);
+          if (Number(clickLines.lines[0].qty) !== 360 || Number(clickLines.lines[1].qty) !== 1344) console.warn('each product row should keep its own qty', clickLines.lines);
           const lkWs = sampleWorkspace('Lookup');
           const custF = remR.headerFields.find((f) => f.fill === 'lookup');
           if (resolveRecipeFill(lkWs, custF, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('customer lookup failed');
