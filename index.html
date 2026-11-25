@@ -131,11 +131,11 @@
     .forge-sheet .jexcel > tbody > tr > td .sheet-attach { min-height: 32px; }
     .forge-sheet .jexcel_toolbar, .forge-sheet .jexcel_pagination, .forge-sheet .jexcel_filter { display: none !important; }
     .jexcel_contextmenu, .jcontextmenu { background: #10192c !important; border: 1px solid #2a3b5c !important; color: #d7e0f2 !important; }
-    .pdf-page { position: relative; background: #fff; }
+    .pdf-page { position: relative; background: #fff; overflow: hidden; isolation: isolate; }
     .pdf-page canvas { display: block; width: 100%; height: auto; }
-    .pdf-hits { position: absolute; inset: 0; }
-    .pdf-hit { position: absolute; border: 1px solid transparent; background: transparent; padding: 0; }
-    .pdf-teach .pdf-hit { cursor: pointer; }
+    .pdf-hits { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
+    .pdf-hit { position: absolute; border: 1px solid transparent; background: transparent; padding: 0; pointer-events: none; }
+    .pdf-teach .pdf-hit { cursor: pointer; pointer-events: auto; }
     .pdf-teach .pdf-hit:hover { background: rgba(245, 185, 66, 0.35); outline: 1px solid #f5b942; }
     .pdf-hit.mapped { outline: 1px solid #3ecfbe; background: rgba(62, 207, 190, 0.2); }
     .pdf-hit.pick { cursor: pointer; }
@@ -205,7 +205,7 @@
     <!-- App shell -->
     <div v-else class="h-full flex flex-col bg-ink-900">
       <!-- Header -->
-      <header class="h-14 shrink-0 border-b border-line bg-ink-850 flex items-center gap-3 px-3 md:px-4">
+      <header class="h-14 shrink-0 border-b border-line bg-ink-850 flex items-center gap-3 px-3 md:px-4 relative z-30">
         <button v-if="!panelMode" class="rounded-md p-2 hover:bg-ink-700" @click="toggleWorkspacePanel" :title="workspacePanelOpen ? 'Hide workspace' : 'Show workspace'">
           <icon name="panel" size="16"></icon>
         </button>
@@ -262,7 +262,7 @@
       <div v-if="mode==='architect' && !recipeTeach.active" class="shrink-0 bg-gold text-ink-900 text-[12px] font-semibold px-4 py-1">
         Architect Mode is unlocked — categories, sheets, lookups, formulas, and client recipes can be changed. Switch back to Operator Mode before handing this screen to data-entry staff.
       </div>
-      <div v-if="recipeTeach.active" class="shrink-0 bg-gold text-ink-900 px-3 py-2 text-[13px] flex flex-wrap items-center gap-2">
+      <div v-if="recipeTeach.active" class="shrink-0 bg-gold text-ink-900 px-3 py-2 text-[13px] flex flex-wrap items-center gap-2 relative z-30">
         <span class="font-semibold">Teaching {{ (recipeDraft && recipeDraft.name) || 'recipe' }}</span>
         <label class="inline-flex items-center gap-1 text-[12px]">Column
           <select v-model="recipeTeach.colId" class="rounded-md bg-ink-900 text-mist px-2 py-1" @change="onTeachColChange">
@@ -423,7 +423,7 @@
                 <img :src="docPreviewSrc" :alt="activeDoc.name" class="max-w-full" :style="{ transform: 'scale(' + imgZoom + ')', transformOrigin: 'top center' }" />
               </div>
               <pre v-else class="h-full overflow-auto p-4 text-[12px] font-mono leading-relaxed whitespace-pre-wrap">{{ activeDoc.text }}</pre>
-              <div class="absolute bottom-2 right-2 flex gap-1">
+              <div class="absolute bottom-2 right-2 flex gap-1 z-10">
                 <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="openDocReader">Read large</button>
                 <template v-if="activeDoc.kind==='image'">
                   <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="imgZoom=Math.max(.4, imgZoom-.1)">−</button>
@@ -1336,7 +1336,8 @@
     const STORAGE_KEY = 'forgegrid.workspace.v1';
     const UNDOCK_CH = 'forgegrid.panels.v1';
     const UNDOCK_SESSION = 'forgegrid.undocked.v1';
-    const { createApp } = window.Vue || {};
+    const { createApp, markRaw } = window.Vue || {};
+    const asRaw = typeof markRaw === 'function' ? markRaw : function (v) { return v; };
 
     const COLUMN_TYPES = [
       { id: 'text', label: 'Text' },
@@ -1642,7 +1643,41 @@
     }
     function colByName(table, name) {
       const n = String(name || '').trim().toLowerCase();
-      return table.columns.find((c) => c.name.toLowerCase() === n);
+      return table && table.columns.find((c) => c.name.toLowerCase() === n);
+    }
+    function columnNameKey(name) {
+      return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    }
+    function columnNameAliases(key) {
+      const groups = [
+        ['orderno', 'ordernumber', 'ordrenr', 'ordre', 'order'],
+        ['customerref', 'customerpo', 'po', 'reference', 'ref'],
+        ['deliverydate', 'receivedate', 'orderdate', 'modtagelsesdato', 'date'],
+        ['customer', 'customername', 'kunde', 'client'],
+        ['customeraddress', 'address', 'adresse'],
+        ['product', 'item', 'sku', 'vare']
+      ];
+      for (let g = 0; g < groups.length; g++) {
+        if (groups[g].indexOf(key) >= 0) return groups[g];
+      }
+      return [key];
+    }
+    function findColumnLoose(store, table, columnId) {
+      if (!table || !columnId) return null;
+      const direct = findColumn(table, columnId);
+      if (direct) return direct;
+      let name = '';
+      (store.tables || []).forEach((t) => {
+        const c = findColumn(t, columnId);
+        if (c && !name) name = c.name;
+      });
+      if (!name) return null;
+      const key = columnNameKey(name);
+      const aliases = columnNameAliases(key);
+      return (table.columns || []).find((c) => {
+        const ck = columnNameKey(c.name);
+        return ck === key || aliases.indexOf(ck) >= 0;
+      }) || null;
     }
     function colIndexToLetter(i) {
       let n = i + 1, s = '';
@@ -2777,16 +2812,40 @@
       return 'text';
     }
 
+    function clipUnit(n, fallback) {
+      const x = Number(n);
+      if (!Number.isFinite(x)) return fallback;
+      return Math.max(0, Math.min(1, x));
+    }
+
+    function sanitizePdfItem(it) {
+      const nx = clipUnit(it.nx, 0);
+      const ny = clipUnit(it.ny, 0);
+      let nw = clipUnit(it.nw, 0.008);
+      let nh = clipUnit(it.nh, 0.01);
+      if (nx + nw > 1) nw = Math.max(0.002, 1 - nx);
+      if (ny + nh > 1) nh = Math.max(0.003, 1 - ny);
+      return { str: String(it.str || ''), nx, ny, nw, nh };
+    }
+
     function pdfItemRect(item, viewport) {
-      const x = item.transform[4];
-      const y = item.transform[5];
+      const tr = item.transform || [1, 0, 0, 1, 0, 0];
+      const x = tr[4] || 0;
+      const y = tr[5] || 0;
       const w = item.width || 0;
-      const h = item.height || Math.abs(item.transform[3]) || Math.abs(item.transform[0]) || 8;
+      const h = item.height || Math.abs(tr[3]) || Math.abs(tr[0]) || 8;
       const a = viewport.convertToViewportPoint(x, y);
       const b = viewport.convertToViewportPoint(x + w, y + h);
       const left = Math.min(a[0], b[0]);
       const top = Math.min(a[1], b[1]);
-      return { x: left, y: top, w: Math.max(Math.abs(b[0] - a[0]), 3), h: Math.max(Math.abs(b[1] - a[1]), 6) };
+      const vw = viewport.width || 1;
+      const vh = viewport.height || 1;
+      return {
+        x: Math.max(0, Math.min(left, vw)),
+        y: Math.max(0, Math.min(top, vh)),
+        w: Math.max(Math.min(Math.abs(b[0] - a[0]), vw), 3),
+        h: Math.max(Math.min(Math.abs(b[1] - a[1]), vh), 6)
+      };
     }
 
     function explodePdfWords(items) {
@@ -2796,7 +2855,7 @@
         const parts = raw.split(/(\s+)/);
         const words = parts.filter((p) => p && !/^\s+$/.test(p));
         if (words.length <= 1) {
-          if (raw.trim()) out.push(it);
+          if (raw.trim()) out.push(sanitizePdfItem(it));
           return;
         }
         let acc = 0;
@@ -2805,19 +2864,18 @@
           if (!p) return;
           const frac = p.length / total;
           if (p.trim()) {
-            out.push({
+            out.push(sanitizePdfItem({
               str: p.trim(),
               nx: it.nx + acc * it.nw,
               ny: it.ny,
               nw: Math.max(frac * it.nw, 0.004),
               nh: it.nh
-            });
+            }));
           }
           acc += frac;
         });
       });
-      out.sort((a, b) => (b.nw * b.nh) - (a.nw * a.nh));
-      return out;
+      return out.filter((it) => it.nw < 0.92 || it.nh < 0.45);
     }
 
     function leftLabelFor(items, hit) {
@@ -2847,20 +2905,20 @@
 
     function readClickMap(pages, map) {
       const sample = String(map.sample || '').trim();
-      if (map.role !== 'line' && sample) return sample;
       const page = pages[(map.page || 1) - 1];
       if (!page) return sample;
       const items = page.items || [];
+      const hit = nearestPdfItem(items, map.nx + map.nw / 2, map.ny + map.nh / 2, 0.08, 0.045);
+      if (hit && String(hit.str || '').trim()) return String(hit.str).replace(/\s+/g, ' ').trim();
       if (sample) {
         const same = items.filter((it) => String(it.str || '').replace(/\s+/g, ' ').trim() === sample);
         if (same.length === 1) return sample;
         if (same.length > 1) {
-          const hit = nearestPdfItem(same, map.nx + map.nw / 2, map.ny + map.nh / 2, 1, 1);
-          if (hit) return String(hit.str).trim();
+          const near = nearestPdfItem(same, map.nx + map.nw / 2, map.ny + map.nh / 2, 1, 1);
+          if (near) return String(near.str).trim();
         }
       }
-      const hit = nearestPdfItem(items, map.nx + map.nw / 2, map.ny + map.nh / 2, 0.08, 0.04);
-      return hit ? String(hit.str).trim() : sample;
+      return sample;
     }
 
     function extractFromMaps(pages, recipe) {
@@ -6626,7 +6684,7 @@
         async addFile(file) {
           const kind = kindOf(file);
           const url = URL.createObjectURL(file);
-          const doc = { id: uid('doc'), name: file.name, size: file.size, type: file.type, kind, url, text: '', file, preview: '' };
+          const doc = { id: uid('doc'), name: file.name, size: file.size, type: file.type, kind, url, text: '', file: asRaw(file), preview: '' };
           if (kind === 'text') doc.text = await file.text();
           this.docs.push(doc);
           this.activeDocId = doc.id;
@@ -6916,18 +6974,18 @@
           const pages = [];
           for (let p = 1; p <= pdf.numPages; p++) {
             await yieldUi();
-            const page = await pdf.getPage(p);
-            const viewport = page.getViewport({ scale: 1.35 });
+            const page = asRaw(await pdf.getPage(p));
+            const viewport = asRaw(page.getViewport({ scale: 1.35 }));
             const content = await page.getTextContent();
             const mapped = content.items.filter((it) => it.str && String(it.str).trim()).map((it) => {
               const r = pdfItemRect(it, viewport);
-              return {
+              return sanitizePdfItem({
                 str: it.str,
                 nx: r.x / viewport.width,
                 ny: r.y / viewport.height,
                 nw: r.w / viewport.width,
                 nh: r.h / viewport.height
-              };
+              });
             });
             const items = this.recipeTeach.active ? explodePdfWords(mapped) : mapped;
             pages.push({ num: p, width: viewport.width, height: viewport.height, items, viewport, page });
@@ -7021,6 +7079,11 @@
           if (!this.recipeDraft.name) return this.toast('Give the recipe a name, for example Rema.', 'warn');
           const i = this.store.recipes.findIndex((r) => r.id === this.recipeDraft.id);
           const copy = clone(this.recipeDraft);
+          const ht = findTable(this.store, copy.headerTableId) || this.currentTable;
+          if (ht && !copy.attachColumnId) {
+            const ac = (ht.columns || []).find((c) => c.type === 'attachment');
+            if (ac) copy.attachColumnId = ac.id;
+          }
           if (i >= 0) this.store.recipes.splice(i, 1, copy);
           else this.store.recipes.push(copy);
           this.selectedRecipeId = copy.id;
@@ -7050,16 +7113,38 @@
           }
           this.recipeBusy = false;
         },
-        recipeForAttach(col, text) {
-          const list = this.store.recipes || [];
-          const hit = detectRecipe(list, text);
+        recipeForAttach(col, text, table) {
+          table = table || this.currentTable;
+          const recipes = this.store.recipes || [];
+          if (!recipes.length) return null;
+          const usesTable = (r) => {
+            if (!r.headerTableId || (table && r.headerTableId === table.id)) return true;
+            const ids = []
+              .concat((r.maps || []).map((m) => m.columnId))
+              .concat((r.headerFields || []).map((f) => f.columnId))
+              .concat([r.attachColumnId, r.statusColumnId, r.customerColumnId]);
+            return ids.some((id) => findColumnLoose(this.store, table, id));
+          };
+          const byAttach = recipes.filter((r) => r.attachColumnId && col && r.attachColumnId === col.id);
+          const byTable = recipes.filter((r) => usesTable(r));
+          const pool = byAttach.length ? byAttach : (byTable.length ? byTable : recipes);
+          const hit = detectRecipe(pool, text) || detectRecipe(recipes, text);
           if (hit) return hit;
-          const tableId = this.currentTableId;
-          const onSheet = list.filter((r) => !r.headerTableId || r.headerTableId === tableId);
-          const onCol = onSheet.filter((r) => !r.attachColumnId || r.attachColumnId === col.id);
-          const pool = onCol.length ? onCol : onSheet;
           if (pool.length === 1) return pool[0];
-          return pool.find((r) => r.attachColumnId === col.id) || null;
+          if (recipes.length === 1) return recipes[0];
+          return byAttach[0] || byTable[0] || null;
+        },
+        recipeCol(table, columnId) {
+          return findColumnLoose(this.store, table, columnId);
+        },
+        recipeWriteCell(table, rec, col, value) {
+          if (!table || !rec || !col || value === '' || value == null) return false;
+          if (col.type === 'rollup' || col.type === 'autonumber' || col.type === 'lookup') return false;
+          if (hasFormula(col)) {
+            if (!rec.rule) rec.rule = {};
+            rec.rule[col.id] = { type: col.type || 'text', formula: null };
+          }
+          return this.setCell(rec, col, value, true, table);
         },
         async fillRowFromAttach(rec, col) {
           if (!rec || !col || rec.locked) return;
@@ -7075,12 +7160,12 @@
             return;
           }
           const url = hit.url || URL.createObjectURL(blob);
-          const doc = { id: 'att-' + meta.id, attachId: meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: '', file: blob };
+          const doc = { id: 'att-' + meta.id, attachId: meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: '', file: asRaw(blob) };
           this.recipeBusy = true;
           this.recipeHint = 'Reading attached file…';
           try {
             doc.text = await this.readDocText(doc);
-            const recipe = this.recipeForAttach(col, doc.text);
+            const recipe = this.recipeForAttach(col, doc.text, this.currentTable);
             if (!recipe) {
               this.recipeHint = 'File attached. No matching recipe — pick one in Docs and Fill sheet, or set detect text on a recipe.';
               this.toast('Attached ' + meta.name + '. No recipe matched, so other cells were left as they are.');
@@ -7090,10 +7175,19 @@
             this.selectedRecipeId = recipe.id;
             const existing = this.docs.find((d) => d.attachId === meta.id);
             if (existing) {
-              existing.url = url; existing.text = doc.text; existing.file = blob; existing.kind = kind;
+              existing.url = url; existing.text = doc.text; existing.file = asRaw(blob); existing.kind = kind;
+              this.activeDocId = existing.id;
               doc.id = existing.id;
+            } else {
+              this.docs.push(doc);
+              this.activeDocId = doc.id;
             }
-            await this.applyRecipeFill(recipe, doc, rec, { skipAttach: true, replaceLines: true, keepView: true });
+            await this.applyRecipeFill(recipe, doc, rec, {
+              skipAttach: true,
+              replaceLines: true,
+              keepView: true,
+              headerTable: this.currentTable
+            });
           } catch (e) {
             this.toast('Could not read the attached file for a recipe.', 'error');
             this.recipeBusy = false;
@@ -7135,48 +7229,51 @@
             }
             const extracted = runRecipeExtract(doc.text, recipe);
             const click = (recipe.maps || []).length && mapPages && mapPages.length ? extractFromMaps(mapPages, recipe) : { header: {}, lines: [] };
-            const headerTable = (this.store.tables || []).find((t) => rec && (t.records || []).some((r) => r.id === rec.id))
+            const headerTable = opts.headerTable
+              || (opts.keepView && this.currentTable)
+              || (this.store.tables || []).find((t) => rec && (t.records || []).some((r) => r.id === rec.id))
               || findTable(this.store, recipe.headerTableId) || this.currentTable;
             if (!headerTable || !rec) {
               this.toast('Pick a header sheet on the recipe.', 'warn');
               this.recipeBusy = false;
               return;
             }
+            let filled = 0;
             (recipe.headerFields || []).forEach((f) => {
-              const col = findColumn(headerTable, f.columnId);
+              const col = this.recipeCol(headerTable, f.columnId);
               const raw = f.fill === 'fixed' ? f.fixed : recipeFieldValue(doc.text, f);
               const val = coerceRecipeCell(this.store, col, f, raw);
-              if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
+              if (this.recipeWriteCell(headerTable, rec, col, val)) filled += 1;
             });
             Object.keys(click.header).forEach((colId) => {
-              const col = findColumn(headerTable, colId);
+              const col = this.recipeCol(headerTable, colId);
               const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role !== 'line');
               const raw = click.header[colId];
               const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
-              if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
+              if (this.recipeWriteCell(headerTable, rec, col, val)) filled += 1;
               else if (col && raw !== '' && raw != null && (isLinkCol(col) || /product|customer|sku/i.test(col.name || ''))) {
                 this.toast(recipeLookupFailMessage(this.store, col, map, raw), 'warn');
               }
               if (map) this.applyRecipeLookupAlso(headerTable, rec, map, raw);
             });
             if (recipe.statusColumnId && recipe.statusValue) {
-              const sc = findColumn(headerTable, recipe.statusColumnId);
-              if (sc) this.setCell(rec, sc, recipe.statusValue, true, headerTable);
+              const sc = this.recipeCol(headerTable, recipe.statusColumnId);
+              if (this.recipeWriteCell(headerTable, rec, sc, recipe.statusValue)) filled += 1;
             }
             if (recipe.customerColumnId && recipe.customerFind) {
-              const cc = findColumn(headerTable, recipe.customerColumnId);
+              const cc = this.recipeCol(headerTable, recipe.customerColumnId);
               const linked = cc && cc.link && findTable(this.store, cc.link.tableId);
               if (linked) {
                 const q = String(recipe.customerFind).toLowerCase();
                 const hit = linked.records.find((r) => JSON.stringify(r.data || {}).toLowerCase().indexOf(q) >= 0);
-                if (hit) this.setCell(rec, cc, hit.id, true, headerTable);
+                if (hit && this.recipeWriteCell(headerTable, rec, cc, hit.id)) filled += 1;
               }
             }
             if (!opts.skipAttach && recipe.attachColumnId && doc.file) {
-              const ac = findColumn(headerTable, recipe.attachColumnId);
+              const ac = this.recipeCol(headerTable, recipe.attachColumnId);
               if (ac && ac.type === 'attachment') {
                 const meta = await fileToAttachMeta(doc.file);
-                this.setCell(rec, ac, meta, true, headerTable);
+                if (this.recipeWriteCell(headerTable, rec, ac, meta)) filled += 1;
               }
             }
             const lineTable = findTable(this.store, recipe.lineTableId);
@@ -7193,11 +7290,11 @@
                   if (lc) this.setCell(lr, lc, rec.id, true, lineTable);
                 }
                 Object.keys(row).forEach((colId) => {
-                  const col = findColumn(lineTable, colId);
+                  const col = this.recipeCol(lineTable, colId);
                   const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role === 'line');
                   const raw = row[colId];
                   const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
-                  if (col && val !== '' && val != null) this.setCell(lr, col, val, true, lineTable);
+                  if (this.recipeWriteCell(lineTable, lr, col, val)) filled += 1;
                   if (map) this.applyRecipeLookupAlso(lineTable, lr, map, raw);
                 });
               });
@@ -7211,25 +7308,32 @@
                   if (lc) this.setCell(lr, lc, rec.id, true, lineTable);
                 }
                 (recipe.lineFields || []).forEach((f) => {
-                  const col = findColumn(lineTable, f.columnId);
+                  const col = this.recipeCol(lineTable, f.columnId);
                   if (!col) return;
                   const raw = f.fill === 'fixed' ? f.fixed : transformRecipeValue(m[f.group], f.transform);
                   const val = coerceRecipeCell(this.store, col, f, raw);
-                  if (val !== '' && val != null) this.setCell(lr, col, val, true, lineTable);
+                  if (this.recipeWriteCell(lineTable, lr, col, val)) filled += 1;
                 });
               });
             }
-            this.currentTableId = headerTable.id;
-            this.currentGroupId = headerTable.groupId;
+            if (!opts.keepView) {
+              this.currentTableId = headerTable.id;
+              this.currentGroupId = headerTable.groupId;
+            }
             this.selectedRecordId = rec.id;
             const first = headerTable.columns[0];
             if (first) this.applySelection({ recId: rec.id, colId: first.id }, { recId: rec.id, colId: first.id });
             if (!opts.keepView) this.view = this.splitOpen ? 'form' : 'grid';
             this.$nextTick(() => this.refreshSheetValues());
             const n = (click.lines.length || extracted.lines.length);
-            this.recipeHint = 'Filled from ' + recipe.name + (n ? ' · ' + n + ' line' + (n === 1 ? '' : 's') : '') + '. Check the row, then edit anything the PDF read poorly.';
-            this.audit('recipe.apply', recipe.name, doc.name);
-            this.toast((opts.skipAttach ? 'Filled this row from ' : 'Filled a ' + headerTable.name + ' row from ') + recipe.name + '.');
+            if (!filled && !n) {
+              this.recipeHint = 'Opened ' + (doc.name || 'PDF') + ' with ' + recipe.name + ', but no cells mapped on this sheet. Teach the recipe on this PDF (pick a column, click the value) and save.';
+              this.toast('Recipe “' + recipe.name + '” ran, but nothing mapped onto this sheet. Teach the PDF clicks for these columns, then attach again.', 'warn');
+            } else {
+              this.recipeHint = 'Filled from ' + recipe.name + (n ? ' · ' + n + ' line' + (n === 1 ? '' : 's') : '') + '. Check the row, then edit anything the PDF read poorly.';
+              this.audit('recipe.apply', recipe.name, doc.name);
+              this.toast((opts.skipAttach ? 'Filled this row from ' : 'Filled a ' + headerTable.name + ' row from ') + recipe.name + '.');
+            }
           } catch (e) {
             this.recipeHint = 'Could not apply this recipe to the file.';
             this.toast('Recipe fill failed. Try Test on open PDF in Recipes.', 'error');
