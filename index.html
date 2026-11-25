@@ -1638,7 +1638,41 @@
     }
     function colByName(table, name) {
       const n = String(name || '').trim().toLowerCase();
-      return table.columns.find((c) => c.name.toLowerCase() === n);
+      return table && table.columns.find((c) => c.name.toLowerCase() === n);
+    }
+    function columnNameKey(name) {
+      return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    }
+    function columnNameAliases(key) {
+      const groups = [
+        ['orderno', 'ordernumber', 'ordrenr', 'ordre', 'order'],
+        ['customerref', 'customerpo', 'po', 'reference', 'ref'],
+        ['deliverydate', 'receivedate', 'orderdate', 'modtagelsesdato', 'date'],
+        ['customer', 'customername', 'kunde', 'client'],
+        ['customeraddress', 'address', 'adresse'],
+        ['product', 'item', 'sku', 'vare']
+      ];
+      for (let g = 0; g < groups.length; g++) {
+        if (groups[g].indexOf(key) >= 0) return groups[g];
+      }
+      return [key];
+    }
+    function findColumnLoose(store, table, columnId) {
+      if (!table || !columnId) return null;
+      const direct = findColumn(table, columnId);
+      if (direct) return direct;
+      let name = '';
+      (store.tables || []).forEach((t) => {
+        const c = findColumn(t, columnId);
+        if (c && !name) name = c.name;
+      });
+      if (!name) return null;
+      const key = columnNameKey(name);
+      const aliases = columnNameAliases(key);
+      return (table.columns || []).find((c) => {
+        const ck = columnNameKey(c.name);
+        return ck === key || aliases.indexOf(ck) >= 0;
+      }) || null;
     }
     function colIndexToLetter(i) {
       let n = i + 1, s = '';
@@ -2844,20 +2878,20 @@
 
     function readClickMap(pages, map) {
       const sample = String(map.sample || '').trim();
-      if (map.role !== 'line' && sample) return sample;
       const page = pages[(map.page || 1) - 1];
       if (!page) return sample;
       const items = page.items || [];
+      const hit = nearestPdfItem(items, map.nx + map.nw / 2, map.ny + map.nh / 2, 0.08, 0.045);
+      if (hit && String(hit.str || '').trim()) return String(hit.str).replace(/\s+/g, ' ').trim();
       if (sample) {
         const same = items.filter((it) => String(it.str || '').replace(/\s+/g, ' ').trim() === sample);
         if (same.length === 1) return sample;
         if (same.length > 1) {
-          const hit = nearestPdfItem(same, map.nx + map.nw / 2, map.ny + map.nh / 2, 1, 1);
-          if (hit) return String(hit.str).trim();
+          const near = nearestPdfItem(same, map.nx + map.nw / 2, map.ny + map.nh / 2, 1, 1);
+          if (near) return String(near.str).trim();
         }
       }
-      const hit = nearestPdfItem(items, map.nx + map.nw / 2, map.ny + map.nh / 2, 0.08, 0.04);
-      return hit ? String(hit.str).trim() : sample;
+      return sample;
     }
 
     function extractFromMaps(pages, recipe) {
@@ -6528,31 +6562,47 @@
         async readDocText(doc) {
           if (!doc) return '';
           if (doc.kind === 'text') return doc.text || (doc.file ? await doc.file.text() : '');
-          if (doc.kind === 'pdf') return this.extractPdfText(doc.url);
+          if (doc.kind === 'pdf') return this.extractPdfText(doc.url, doc.file);
           if (doc.kind === 'image') return '';
           return doc.text || '';
         },
-        async getPdfDocument(url) {
-          if (!url || !window.pdfjsLib) throw new Error('pdf.js missing');
-          if (this._pdfDocUrl === url && this._pdfDoc) return this._pdfDoc;
-          if (this._pdfDocUrl === url && this._pdfDocPromise) return this._pdfDocPromise;
-          if (this._pdfLoadingTask && this._pdfDocUrl !== url) {
+        async getPdfDocument(url, file) {
+          if (!window.pdfjsLib) throw new Error('pdf.js missing');
+          if (url && this._pdfDocUrl === url && this._pdfDoc) return this._pdfDoc;
+          if (url && this._pdfDocUrl === url && this._pdfDocPromise) return this._pdfDocPromise;
+          if (this._pdfLoadingTask && this._pdfDocUrl && this._pdfDocUrl !== url) {
             try { this._pdfLoadingTask.destroy(); } catch (e) { /* ignore */ }
             this._pdfLoadingTask = null;
             this._pdfDoc = null;
             this._pdfDocPromise = null;
           }
-          this._pdfDocUrl = url;
-          this._pdfLoadingTask = window.pdfjsLib.getDocument({ url, withCredentials: false });
-          this._pdfDocPromise = this._pdfLoadingTask.promise.then((pdf) => {
-            this._pdfDoc = asRaw(pdf);
-            return this._pdfDoc;
+          this._pdfDocUrl = url || ('file:' + (file && file.name) || 'pdf');
+          const open = async () => {
+            let task = null;
+            if (url) {
+              try {
+                task = window.pdfjsLib.getDocument({ url, withCredentials: false });
+                this._pdfLoadingTask = task;
+                return asRaw(await task.promise);
+              } catch (e) { /* fall through to bytes */ }
+            }
+            if (file) {
+              const buf = await file.arrayBuffer();
+              task = window.pdfjsLib.getDocument({ data: new Uint8Array(buf) });
+              this._pdfLoadingTask = task;
+              return asRaw(await task.promise);
+            }
+            throw new Error('pdf.js missing');
+          };
+          this._pdfDocPromise = open().then((pdf) => {
+            this._pdfDoc = pdf;
+            return pdf;
           });
           return this._pdfDocPromise;
         },
-        async extractPdfText(url) {
+        async extractPdfText(url, file) {
           if (!window.pdfjsLib) throw new Error('pdf.js missing');
-          const pdf = await this.getPdfDocument(url);
+          const pdf = await this.getPdfDocument(url, file);
           const parts = [];
           for (let i = 1; i <= pdf.numPages; i++) {
             const page = asRaw(await pdf.getPage(i));
@@ -6790,14 +6840,16 @@
           }
         },
         async loadPdfView(doc) {
-          if (!doc || !doc.url || !window.pdfjsLib) return;
+          if (!doc || (!doc.url && !doc.file) || !window.pdfjsLib) return;
           if (this.pdfView.src === doc.url && this.pdfView.pages.length) return;
+          if (this._pdfViewPromise && this._pdfViewUrl === doc.url) return this._pdfViewPromise;
           this._pdfLoad = (this._pdfLoad || 0) + 1;
           const token = this._pdfLoad;
+          this._pdfViewUrl = doc.url;
+          const run = async () => {
           this.cancelPdfRenders();
-          this.pdfView = { pages: [], src: doc.url };
           try {
-            const pdf = await this.getPdfDocument(doc.url);
+            const pdf = await this.getPdfDocument(doc.url, doc.file);
             if (token !== this._pdfLoad) return;
             const pages = [];
             const gfx = {};
@@ -6825,6 +6877,11 @@
           } catch (e) {
             if (token !== this._pdfLoad) return;
             this.recipeHint = 'Could not render this PDF for clicking.';
+          }
+          };
+          this._pdfViewPromise = run();
+          try { await this._pdfViewPromise; } finally {
+            if (this._pdfViewUrl === doc.url) this._pdfViewPromise = null;
           }
         },
         lookupColumns(tableId) {
@@ -6864,6 +6921,11 @@
           if (!this.recipeDraft.name) return this.toast('Give the recipe a name, for example Rema.', 'warn');
           const i = this.store.recipes.findIndex((r) => r.id === this.recipeDraft.id);
           const copy = clone(this.recipeDraft);
+          const ht = findTable(this.store, copy.headerTableId) || this.currentTable;
+          if (ht && !copy.attachColumnId) {
+            const ac = (ht.columns || []).find((c) => c.type === 'attachment');
+            if (ac) copy.attachColumnId = ac.id;
+          }
           if (i >= 0) this.store.recipes.splice(i, 1, copy);
           else this.store.recipes.push(copy);
           this.selectedRecipeId = copy.id;
@@ -6893,15 +6955,38 @@
           }
           this.recipeBusy = false;
         },
-        recipeForAttach(col, text) {
-          const tableId = this.currentTableId;
-          const list = (this.store.recipes || []).filter((r) => !r.headerTableId || r.headerTableId === tableId);
-          const onCol = list.filter((r) => !r.attachColumnId || r.attachColumnId === col.id);
-          const pool = onCol.length ? onCol : list;
-          const hit = detectRecipe(pool, text);
+        recipeForAttach(col, text, table) {
+          table = table || this.currentTable;
+          const recipes = this.store.recipes || [];
+          if (!recipes.length) return null;
+          const usesTable = (r) => {
+            if (!r.headerTableId || (table && r.headerTableId === table.id)) return true;
+            const ids = []
+              .concat((r.maps || []).map((m) => m.columnId))
+              .concat((r.headerFields || []).map((f) => f.columnId))
+              .concat([r.attachColumnId, r.statusColumnId, r.customerColumnId]);
+            return ids.some((id) => findColumnLoose(this.store, table, id));
+          };
+          const byAttach = recipes.filter((r) => r.attachColumnId && col && r.attachColumnId === col.id);
+          const byTable = recipes.filter((r) => usesTable(r));
+          const pool = byAttach.length ? byAttach : (byTable.length ? byTable : recipes);
+          const hit = detectRecipe(pool, text) || detectRecipe(recipes, text);
           if (hit) return hit;
           if (pool.length === 1) return pool[0];
-          return pool.find((r) => r.attachColumnId === col.id) || null;
+          if (recipes.length === 1) return recipes[0];
+          return byAttach[0] || byTable[0] || null;
+        },
+        recipeCol(table, columnId) {
+          return findColumnLoose(this.store, table, columnId);
+        },
+        recipeWriteCell(table, rec, col, value) {
+          if (!table || !rec || !col || value === '' || value == null) return false;
+          if (col.type === 'rollup' || col.type === 'autonumber' || col.type === 'lookup') return false;
+          if (hasFormula(col)) {
+            if (!rec.rule) rec.rule = {};
+            rec.rule[col.id] = { type: col.type || 'text', formula: null };
+          }
+          return this.setCell(rec, col, value, true, table);
         },
         async fillRowFromAttach(rec, col) {
           if (!rec || !col || rec.locked) return;
@@ -6917,12 +7002,12 @@
             return;
           }
           const url = hit.url || URL.createObjectURL(blob);
-          const doc = { id: 'att-' + meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: '', file: blob };
+          const doc = { id: 'att-' + meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: '', file: asRaw(blob) };
           this.recipeBusy = true;
           this.recipeHint = 'Reading attached file…';
           try {
             doc.text = await this.readDocText(doc);
-            const recipe = this.recipeForAttach(col, doc.text);
+            const recipe = this.recipeForAttach(col, doc.text, this.currentTable);
             if (!recipe) {
               this.recipeHint = 'File attached. No matching recipe — pick one in Docs and Fill sheet, or set detect text on a recipe.';
               this.toast('Attached ' + meta.name + '. No recipe matched, so other cells were left as they are.');
@@ -6932,14 +7017,19 @@
             this.selectedRecipeId = recipe.id;
             const existing = this.docs.find((d) => d.attachId === meta.id);
             if (existing) {
-              existing.url = url; existing.text = doc.text; existing.file = blob; existing.kind = kind;
+              existing.url = url; existing.text = doc.text; existing.file = asRaw(blob); existing.kind = kind;
               this.activeDocId = existing.id;
               doc.id = existing.id;
             } else {
               this.docs.push(Object.assign({}, doc, { attachId: meta.id }));
               this.activeDocId = doc.id;
             }
-            await this.applyRecipeFill(recipe, doc, rec, { skipAttach: true, replaceLines: true, keepView: true });
+            await this.applyRecipeFill(recipe, doc, rec, {
+              skipAttach: true,
+              replaceLines: true,
+              keepView: true,
+              headerTable: this.currentTable
+            });
           } catch (e) {
             this.toast('Could not read the attached file for a recipe.', 'error');
             this.recipeBusy = false;
@@ -6972,49 +7062,51 @@
           try {
             if (!doc.text) doc.text = await this.readDocText(doc);
             if (doc.kind === 'pdf' && (!this.pdfView.pages.length || this.pdfView.src !== doc.url)) await this.loadPdfView(doc);
+            if (doc.kind === 'pdf' && (!this.pdfView.pages.length || this.pdfView.src !== doc.url)) await this.loadPdfView(doc);
             const extracted = runRecipeExtract(doc.text, recipe);
             const click = (recipe.maps || []).length && this.pdfView.pages.length ? extractFromMaps(this.pdfView.pages, recipe) : { header: {}, lines: [] };
-            const headerTable = findTable(this.store, recipe.headerTableId) || this.currentTable;
+            const headerTable = opts.headerTable || (opts.keepView && this.currentTable) || findTable(this.store, recipe.headerTableId) || this.currentTable;
             if (!headerTable || !rec) {
               this.toast('Pick a header sheet on the recipe.', 'warn');
               this.recipeBusy = false;
               return;
             }
+            let filled = 0;
             (recipe.headerFields || []).forEach((f) => {
-              const col = findColumn(headerTable, f.columnId);
+              const col = this.recipeCol(headerTable, f.columnId);
               const raw = f.fill === 'fixed' ? f.fixed : recipeFieldValue(doc.text, f);
               const val = coerceRecipeCell(this.store, col, f, raw);
-              if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
+              if (this.recipeWriteCell(headerTable, rec, col, val)) filled += 1;
             });
             Object.keys(click.header).forEach((colId) => {
-              const col = findColumn(headerTable, colId);
+              const col = this.recipeCol(headerTable, colId);
               const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role !== 'line');
               const raw = click.header[colId];
               const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
-              if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
+              if (this.recipeWriteCell(headerTable, rec, col, val)) filled += 1;
               else if (col && raw !== '' && raw != null && (isLinkCol(col) || /product|customer|sku/i.test(col.name || ''))) {
                 this.toast(col.name + ': no match for “' + raw + '”. Add that SKU/name on Products/Customers, or set lookup on the click.', 'warn');
               }
               if (map) this.applyRecipeLookupAlso(headerTable, rec, map, raw);
             });
             if (recipe.statusColumnId && recipe.statusValue) {
-              const sc = findColumn(headerTable, recipe.statusColumnId);
-              if (sc) this.setCell(rec, sc, recipe.statusValue, true, headerTable);
+              const sc = this.recipeCol(headerTable, recipe.statusColumnId);
+              if (this.recipeWriteCell(headerTable, rec, sc, recipe.statusValue)) filled += 1;
             }
             if (recipe.customerColumnId && recipe.customerFind) {
-              const cc = findColumn(headerTable, recipe.customerColumnId);
+              const cc = this.recipeCol(headerTable, recipe.customerColumnId);
               const linked = cc && cc.link && findTable(this.store, cc.link.tableId);
               if (linked) {
                 const q = String(recipe.customerFind).toLowerCase();
                 const hit = linked.records.find((r) => JSON.stringify(r.data || {}).toLowerCase().indexOf(q) >= 0);
-                if (hit) this.setCell(rec, cc, hit.id, true, headerTable);
+                if (hit && this.recipeWriteCell(headerTable, rec, cc, hit.id)) filled += 1;
               }
             }
             if (!opts.skipAttach && recipe.attachColumnId && doc.file) {
-              const ac = findColumn(headerTable, recipe.attachColumnId);
+              const ac = this.recipeCol(headerTable, recipe.attachColumnId);
               if (ac && ac.type === 'attachment') {
                 const meta = await fileToAttachMeta(doc.file);
-                this.setCell(rec, ac, meta, true, headerTable);
+                if (this.recipeWriteCell(headerTable, rec, ac, meta)) filled += 1;
               }
             }
             const lineTable = findTable(this.store, recipe.lineTableId);
@@ -7031,11 +7123,11 @@
                   if (lc) this.setCell(lr, lc, rec.id, true, lineTable);
                 }
                 Object.keys(row).forEach((colId) => {
-                  const col = findColumn(lineTable, colId);
+                  const col = this.recipeCol(lineTable, colId);
                   const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role === 'line');
                   const raw = row[colId];
                   const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
-                  if (col && val !== '' && val != null) this.setCell(lr, col, val, true, lineTable);
+                  if (this.recipeWriteCell(lineTable, lr, col, val)) filled += 1;
                   if (map) this.applyRecipeLookupAlso(lineTable, lr, map, raw);
                 });
               });
@@ -7049,25 +7141,32 @@
                   if (lc) this.setCell(lr, lc, rec.id, true, lineTable);
                 }
                 (recipe.lineFields || []).forEach((f) => {
-                  const col = findColumn(lineTable, f.columnId);
+                  const col = this.recipeCol(lineTable, f.columnId);
                   if (!col) return;
                   const raw = f.fill === 'fixed' ? f.fixed : transformRecipeValue(m[f.group], f.transform);
                   const val = coerceRecipeCell(this.store, col, f, raw);
-                  if (val !== '' && val != null) this.setCell(lr, col, val, true, lineTable);
+                  if (this.recipeWriteCell(lineTable, lr, col, val)) filled += 1;
                 });
               });
             }
-            this.currentTableId = headerTable.id;
-            this.currentGroupId = headerTable.groupId;
+            if (!opts.keepView) {
+              this.currentTableId = headerTable.id;
+              this.currentGroupId = headerTable.groupId;
+            }
             this.selectedRecordId = rec.id;
             const first = headerTable.columns[0];
             if (first) this.applySelection({ recId: rec.id, colId: first.id }, { recId: rec.id, colId: first.id });
             if (!opts.keepView) this.view = this.splitOpen ? 'form' : 'grid';
             this.$nextTick(() => this.refreshSheetValues());
             const n = (click.lines.length || extracted.lines.length);
-            this.recipeHint = 'Filled from ' + recipe.name + (n ? ' · ' + n + ' line' + (n === 1 ? '' : 's') : '') + '. Check the row, then edit anything the PDF read poorly.';
-            this.audit('recipe.apply', recipe.name, doc.name);
-            this.toast((opts.skipAttach ? 'Filled this row from ' : 'Filled a ' + headerTable.name + ' row from ') + recipe.name + '.');
+            if (!filled && !n) {
+              this.recipeHint = 'Opened ' + (doc.name || 'PDF') + ' with ' + recipe.name + ', but no cells mapped on this sheet. Teach the recipe on this PDF (pick a column, click the value) and save.';
+              this.toast('Recipe “' + recipe.name + '” ran, but nothing mapped onto this sheet. Teach the PDF clicks for these columns, then attach again.', 'warn');
+            } else {
+              this.recipeHint = 'Filled from ' + recipe.name + (n ? ' · ' + n + ' line' + (n === 1 ? '' : 's') : '') + '. Check the row, then edit anything the PDF read poorly.';
+              this.audit('recipe.apply', recipe.name, doc.name);
+              this.toast((opts.skipAttach ? 'Filled this row from ' : 'Filled a ' + headerTable.name + ' row from ') + recipe.name + '.');
+            }
           } catch (e) {
             this.recipeHint = 'Could not apply this recipe to the file.';
             this.toast('Recipe fill failed. Try Test on open PDF in Recipes.', 'error');
