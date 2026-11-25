@@ -405,8 +405,9 @@
             </div>
             <div v-else class="h-full rounded-xl border border-line bg-ink-950 overflow-hidden relative" :class="recipeTeach.active && 'pdf-teach'">
               <div v-if="activeDoc.kind==='pdf'" class="h-full overflow-auto bg-white">
-                <iframe v-if="!pdfView.pages.length && activeDoc.url" :src="activeDoc.url + '#toolbar=0&navpanes=0&view=FitH'" class="w-full h-full min-h-[70vh] border-0 bg-white" title="PDF preview"></iframe>
-                <div v-else-if="!pdfView.pages.length" class="h-full grid place-items-center text-ink-900 text-sm">{{ pdfView.error || 'No PDF bytes to show. Use Open file again.' }}</div>
+                <iframe v-if="activeDoc.url && !recipeTeach.active" :src="activeDoc.url + '#toolbar=0&navpanes=0&view=FitH'" class="w-full h-full min-h-[70vh] border-0 bg-white" title="PDF preview"></iframe>
+                <template v-else>
+                <div v-if="!pdfView.pages.length" class="h-full grid place-items-center text-ink-900 text-sm">{{ pdfView.error || 'Preparing click map… you can keep using the sheet.' }}</div>
                 <div v-for="page in pdfView.pages" :key="(activeDoc && activeDoc.id) + '-' + page.num" class="pdf-page mx-auto">
                   <canvas :ref="el => renderPdfCanvas(page, el)" :width="page.width" :height="page.height"></canvas>
                   <div class="pdf-hits">
@@ -417,6 +418,7 @@
                       @click.stop="onPdfTextClick(page, it)"></button>
                   </div>
                 </div>
+                </template>
               </div>
               <div v-else-if="activeDoc.kind==='image'" class="h-full overflow-auto grid place-items-center bg-ink-950">
                 <img :src="activeDoc.url" :alt="activeDoc.name" class="max-w-full" :style="{ transform: 'scale(' + imgZoom + ')', transformOrigin: 'top center' }" />
@@ -3540,15 +3542,23 @@
         </div>`
     };
 
+    function yieldUi() {
+      return new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
     function openPdfDocument(spec) {
       const lib = window.pdfjsLib;
       if (!lib) return Promise.reject(new Error('pdf.js missing'));
-      const src = Object.assign({ disableWorker: true, isEvalSupported: false }, spec);
+      const src = Object.assign({ isEvalSupported: false }, spec);
       const task = lib.getDocument(src);
-      return Promise.race([
-        task.promise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('PDF timed out')), 20000))
-      ]);
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          try { task.destroy(); } catch (e) {}
+          reject(new Error('PDF timed out'));
+        }, 20000);
+      });
+      return Promise.race([task.promise, timeout]).finally(() => clearTimeout(timer));
     }
 
     if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
@@ -3968,8 +3978,8 @@
           this.$nextTick(() => this.bindSheet());
         },
         activeDoc(doc) {
-          if (doc && doc.kind === 'pdf') this.loadPdfView(doc);
-          else this.pdfView = { pages: [], src: '', error: '' };
+          if (doc && doc.kind === 'pdf' && this.recipeTeach.active) this.loadPdfView(doc);
+          else if (!(doc && doc.kind === 'pdf')) this.pdfView = { pages: [], src: '', error: '' };
           this.sendUndockPdf();
         },
         recipeTeach: {
@@ -3977,6 +3987,7 @@
           handler(v) {
             if (this._remoteTeach) return;
             this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, line: v.line } });
+            if (v && v.active && this.activeDoc && this.activeDoc.kind === 'pdf') this.loadPdfView(this.activeDoc);
           }
         },
         docsPaneVisible(v) {
@@ -6595,13 +6606,15 @@
           this.pdfZoom = 'page-width';
           if (kind === 'pdf' && this.splitWidth < 52) this.splitWidth = 52;
           this.audit('document.open', file.name, kind);
-          this.recipeHint = 'Reading document…';
-          try {
-            doc.text = await this.readDocText(doc);
-            this.afterDocText(doc);
-          } catch (e) {
-            this.recipeHint = 'Could not read text from this file. You can still map a recipe after pasting text, or try a clearer PDF.';
-          }
+          this.recipeHint = 'Opened ' + file.name + '.';
+          setTimeout(() => {
+            this.readDocText(doc).then((t) => {
+              doc.text = t;
+              this.afterDocText(doc);
+            }).catch(() => {
+              this.recipeHint = 'Could not read text from this file. You can still map a recipe after pasting text, or try a clearer PDF.';
+            });
+          }, 40);
         },
         async readDocText(doc) {
           if (!doc) return '';
@@ -6857,9 +6870,11 @@
           if (!doc || !window.pdfjsLib) return [];
           if (doc._pdfPages && doc._pdfPages.length) return doc._pdfPages;
           const data = await this.pdfBytes(doc);
+          await yieldUi();
           const pdf = await openPdfDocument({ data });
           const pages = [];
           for (let p = 1; p <= pdf.numPages; p++) {
+            await yieldUi();
             const page = await pdf.getPage(p);
             const viewport = page.getViewport({ scale: 1.35 });
             const content = await page.getTextContent();
@@ -7068,13 +7083,9 @@
           opts = opts || {};
           try {
             if (!doc.text) doc.text = await this.readDocText(doc);
-            let mapPages = this.pdfView.pages;
-            if (doc.kind === 'pdf') {
+            let mapPages = (this.pdfView && this.pdfView.pages) || [];
+            if (doc.kind === 'pdf' && (recipe.maps || []).length) {
               mapPages = await this.parsePdfPages(doc);
-              if (this.docsPaneVisible && this.activeDoc && (this.activeDoc.id === doc.id || this.activeDoc.attachId && doc.attachId && this.activeDoc.attachId === doc.attachId)) {
-                this.pdfView = { pages: mapPages, src: doc.id || doc.url };
-                await this.$nextTick();
-              }
             }
             const extracted = runRecipeExtract(doc.text, recipe);
             const click = (recipe.maps || []).length && mapPages && mapPages.length ? extractFromMaps(mapPages, recipe) : { header: {}, lines: [] };
