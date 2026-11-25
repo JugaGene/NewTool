@@ -5094,12 +5094,13 @@
           return '';
         },
         teachWantPhrase() {
-          if (!this.recipeTeach.active || !this.recipeTeach.colId) return false;
+          if (!this.recipeTeach.active) return false;
           const pick = String(this.recipeTeach.pick || '');
           const role = pick.indexOf(':') >= 0 ? pick.slice(0, pick.indexOf(':')) : '';
           const col = this.teachColumns.find((c) => c.id === this.recipeTeach.colId && (!c.teachRole || c.teachRole === role || !role))
             || this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
           if (col && qtyLikeColumn(col)) return false;
+          if (!this.recipeTeach.colId) return true;
           if (this.recipeTeach.line) return true;
           return !!(col && /product|name|navn|beskriv|vare|item/i.test(col.name || ''));
         },
@@ -5115,14 +5116,12 @@
             return 'Check the gold highlight. Fewer/More words if needed, then Use this (Enter). Esc cancels.';
           }
           if (this.recipeTeach.colId && this.recipeTeach.line) {
-            return 'Click the product line (anywhere on the name). The whole description is highlighted — then Use this. Qty is still a single click.';
+            return 'Click any product line. The whole name column lights up. Then change the gold Column box to Qty for the next field — do not clear the column.';
           }
           if (this.recipeTeach.colId) {
-            return this.undocked.docs || this.panelMode === 'docs'
-              ? 'Click the product line or the value on the PDF window.'
-              : 'Click the product line or the value on the PDF at the left.';
+            return 'Click that value on the PDF. The column stays selected so you can map another field after.';
           }
-          return 'Pick Line Items · Product, then click a product line on the PDF.';
+          return 'Click a product line — Product is selected for you.';
         },
         teachLinePreview() {
           if (!this.recipeTeach.active) return '';
@@ -8136,13 +8135,14 @@
           }
           ensureRecipeLineTable(this.store, this.recipeDraft);
           this.recipeTeach = { active: true, colId: '', pick: '', line: !!ensureRecipeLineTable(this.store, this.recipeDraft) };
+          this.autoPickTeachProductColumn();
           this.selectedRecipeId = this.recipeDraft.id;
           if (this.splitWidth < 46) this.splitWidth = 48;
           if (!this.activeDoc || this.activeDoc.kind !== 'pdf') {
-            this.recipeHint = 'Click Open file on the left and choose the client PDF, then pick a column in the gold bar and click the value on the page.';
-            this.toast('Open the PDF first (Docs → Open file), then pick a column and click it on the page.');
+            this.recipeHint = 'Open the client PDF, then click a product line on the page. The name column is already selected.';
+            this.toast('Open the PDF first (Docs → Open file), then click a product name on the page.');
           } else {
-            this.recipeHint = 'Pick a column in the gold bar, then click that value on the PDF.';
+            this.recipeHint = 'Click a product line on the PDF. Every name in that column will highlight. Then pick Qty in the gold bar for the next field.';
             this.ensurePdfTeachView(this.activeDoc);
           }
         },
@@ -8169,6 +8169,22 @@
           } else if (col) {
             this.recipeHint = 'Click or drag “' + col.name + '” on the PDF (once for the whole order). Leave Several products on to map repeating product names.';
           }
+        },
+        autoPickTeachProductColumn() {
+          if (this.recipeTeach.colId) return;
+          const cols = this.teachColumns || [];
+          const prod = cols.find((c) => c.teachRole === 'line' && /product|packed\s*product|^name$|navn|beskriv|vare/i.test(c.name || '') && !/qty|antal|sku|code|item\s*no/i.test(c.name || ''))
+            || cols.find((c) => c.teachRole === 'line' && /product|vare/i.test(c.name || ''))
+            || cols.find((c) => /product|packed\s*product/i.test(c.name || '') && !/qty|antal/i.test(c.name || ''));
+          if (!prod) return;
+          this.recipeTeach.pick = (prod.teachRole || 'line') + ':' + prod.id;
+          this.recipeTeach.colId = prod.id;
+          if (prod.teachRole === 'line') this.recipeTeach.line = true;
+        },
+        ensureTeachColumn() {
+          if (this.recipeTeach.colId) return true;
+          this.autoPickTeachProductColumn();
+          return !!this.recipeTeach.colId;
         },
         onTeachLineToggle() {
           normalizeLineSkip(this.recipeDraft);
@@ -8309,11 +8325,16 @@
         confirmPhraseDraft() {
           const d = this.pdfPhraseDraft;
           if (!d) return;
+          if (!this.ensureTeachColumn()) {
+            this.toast('Pick Product in the gold bar, then Use this.');
+            return;
+          }
           const page = { num: d.page, items: d.items };
           const hit = phraseHitFromItems(d.picked);
           this.pdfPhraseDraft = null;
           if (!hit || !hit.str) return;
-          this.onPdfTextClick(page, hit, { phrase: d.picked.length > 1 || /\s/.test(hit.str) });
+          this.recipeTeach.line = true;
+          this.onPdfTextClick(page, hit, { phrase: true });
         },
         onPdfPageDown(ev, page) {
           if (!this.recipeTeach.active || this.teachWantPhrase) return;
@@ -8338,16 +8359,25 @@
           const pt = pdfNormPoint(ev, ev.currentTarget);
           const word = this.pdfWordAt(page, pt.nx, pt.ny);
           if (this.teachWantPhrase) {
+            this.ensureTeachColumn();
             const y = word ? pdfLineY(word) : pt.ny;
             const cell = descriptionOnLine(page.items, y);
-            if (cell.length) {
-              this.beginPhraseDraft(page, cell, y);
+            const picked = cell.length ? cell : (word ? expandPhraseRun(page.items, word) : []);
+            if (!picked.length) return this.toast('Click the product name on that line.', 'warn');
+            if (this.pdfPhraseDraft && joinPdfItemTexts(this.pdfPhraseDraft.picked) === joinPdfItemTexts(picked)) {
+              this.confirmPhraseDraft();
               return;
             }
-            if (word) this.beginPhraseDraft(page, expandPhraseRun(page.items, word), y);
-            else this.toast('Click the product name on that line.', 'warn');
+            if (picked.length >= 2 && this.recipeTeach.colId) {
+              this.recipeTeach.line = true;
+              const hit = phraseHitFromItems(picked);
+              if (hit) this.onPdfTextClick(page, hit, { phrase: true });
+              return;
+            }
+            this.beginPhraseDraft(page, picked, y);
             return;
           }
+          if (!this.ensureTeachColumn()) return this.toast('Pick a column in the gold bar, then click the PDF.');
           if (!word) return this.toast('Click closer to the value you want to map.', 'warn');
           this.onPdfTextClick(page, word);
         },
@@ -8365,8 +8395,10 @@
             });
             return;
           }
-          if (!this.recipeTeach.active || !this.recipeTeach.colId) {
-            if (this.recipeTeach.active) this.toast('Pick a column in the gold bar first.', 'warn');
+          if (!this.recipeTeach.active) return;
+          if (!this.recipeTeach.colId) this.ensureTeachColumn();
+          if (!this.recipeTeach.colId) {
+            this.toast('Pick a column in the gold bar first.', 'warn');
             return;
           }
           let sample = String(it.str || '').replace(/\s+/g, ' ').trim();
@@ -8392,8 +8424,8 @@
           }
           const hasProductLines = (this.recipeDraft.maps || []).some((m) => m.role === 'line' && (mapIsPhrase(m) || skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample))));
           const qtyForPacked = (hasProductLines || this.recipeTeach.line) && (qtyLikeColumn(mapCol) || (isQtyToken(sample) && !skuLikeSample(sample)));
-          const lineCol = pickRole === 'line' || !!(mapCol && mapCol.teachRole === 'line') || qtyForPacked || (this.recipeTeach.line && (phrase || skuLikeSample(sample))) || (skuLikeSample(sample) && findColumn(findTable(this.store, this.recipeDraft.lineTableId), this.recipeTeach.colId));
-          if (lineCol) this.recipeTeach.line = true;
+          const lineCol = phrase || pickRole === 'line' || !!(mapCol && mapCol.teachRole === 'line') || qtyForPacked || (this.recipeTeach.line && (phrase || skuLikeSample(sample))) || (skuLikeSample(sample) && findColumn(findTable(this.store, this.recipeDraft.lineTableId), this.recipeTeach.colId));
+          if (lineCol || phrase) this.recipeTeach.line = true;
           let transform = guessTransform(sample);
           if (phrase) transform = 'text';
           if (transform === 'number' && mapCol && (isLinkCol(mapCol) || mapCol.type === 'text' || mapCol.type === 'search' || /product|sku|customer/i.test(mapCol.name || ''))) {
@@ -8500,9 +8532,8 @@
               this.toast('Column mapped. Later orders with different products still fill — unique numbers only.');
             }
           } else {
-            this.recipeTeach.colId = '';
-            this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
-            this.toast('Mapped ' + sample + ' → column.');
+            this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. Column stays selected — pick the next column in the gold bar when you want a different field.';
+            this.toast('Mapped ' + sample + ' → column. Pick the next column when you are ready.');
           }
         },
         async parsePdfPages(doc) {
