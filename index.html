@@ -1611,6 +1611,11 @@
         (t.records || []).forEach((r) => {
           if (!Array.isArray(r.audit)) r.audit = [];
           if (r.locked == null) r.locked = false;
+          (t.columns || []).forEach((c) => {
+            if (!r.data) return;
+            const v = r.data[c.id];
+            if (isTextColumn(c) && typeof v === 'number' && Number.isFinite(v)) r.data[c.id] = String(v);
+          });
         });
       });
       if (!store.recipes.length && store.tables.some((t) => t.id === 'tbl_orders')) {
@@ -1640,6 +1645,10 @@
     function findColumn(table, id) { return table && table.columns.find((c) => c.id === id); }
     function isLinkCol(col) {
       return !!(col && (col.type === 'link' || col.type === 'search') && col.link);
+    }
+    function isTextColumn(col) {
+      const t = col && col.type;
+      return t === 'text' || t === 'longtext' || t === 'search' || t === 'email' || t === 'phone' || t === 'url';
     }
     function colByName(table, name) {
       const n = String(name || '').trim().toLowerCase();
@@ -2609,6 +2618,13 @@
       return String(raw).replace(/\s+/g, ' ').trim();
     }
 
+    function recipeMapValue(map, raw) {
+      const text = String(raw == null ? '' : raw).replace(/\s+/g, ' ').trim();
+      if (!text) return '';
+      if (map && map.fill === 'lookup') return text;
+      return transformRecipeValue(text, map && map.transform);
+    }
+
     function recipeFieldValue(text, field) {
       if (!field) return '';
       if (field.regex) {
@@ -2955,7 +2971,7 @@
       const maps = recipe.maps || [];
       const header = {};
       maps.filter((m) => m.role !== 'line').forEach((m) => {
-        header[m.columnId] = transformRecipeValue(readClickMap(pages, m), m.transform);
+        header[m.columnId] = recipeMapValue(m, readClickMap(pages, m));
       });
       const lineMaps = maps.filter((m) => m.role === 'line');
       const lines = [];
@@ -2979,9 +2995,9 @@
           lineMaps.forEach((m) => {
             const it = nearestPdfItem(items, m.nx + m.nw / 2, c.y, 0.045, 0.012);
             if (!it) return;
-            const val = transformRecipeValue(it.str, m.transform);
+            const val = recipeMapValue(m, it.str);
             if (val === '' || val == null) return;
-            if ((m.transform === 'number' || m.transform === 'number-dk') && typeof val !== 'number') return;
+            if (m.fill !== 'lookup' && (m.transform === 'number' || m.transform === 'number-dk') && typeof val !== 'number') return;
             row[m.columnId] = val;
             filled += 1;
           });
@@ -5859,6 +5875,7 @@
             if (col.min != null && Number(value) < col.min) { if (!quiet) this.toast(col.name + ' is below minimum.', 'error'); return false; }
             if (col.max != null && Number(value) > col.max) { if (!quiet) this.toast(col.name + ' is above maximum.', 'error'); return false; }
           }
+          if (isTextColumn(col) && value != null && value !== '' && !isAttachMeta(value)) value = String(value);
           rec.data[col.id] = value;
           if (rec.fx) delete rec.fx[col.id];
           rec.updatedAt = nowIso();
@@ -6984,6 +7001,12 @@
             };
           } else {
             map.lookup = emptyRecipeLookup();
+          }
+          if (map.fill === 'lookup' && map.lookup && map.lookup.tableId) {
+            const matchC = findColumn(findTable(this.store, map.lookup.tableId), map.lookup.matchColumnId);
+            if (isTextColumn(matchC) || isTextColumn(mapCol) || isLinkCol(mapCol)) map.transform = 'text';
+          } else if (isTextColumn(mapCol)) {
+            map.transform = 'text';
           }
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
           this.recipeDraft.maps = this.recipeDraft.maps.filter((m) => !(m.columnId === map.columnId && m.role === map.role));
