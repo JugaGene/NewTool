@@ -2589,6 +2589,37 @@
       return rawStored(hit, outCol);
     }
 
+    function matchLinkedRecord(store, col, raw) {
+      if (!isLinkCol(col)) return raw;
+      const needle = String(raw == null ? '' : raw).trim();
+      if (!needle) return '';
+      const lt = findTable(store, col.link && col.link.tableId);
+      if (!lt) return '';
+      if (lt.records.some((r) => r.id === needle)) return needle;
+      const dc = findColumn(lt, col.link.displayColumnId) || lt.columns[0];
+      const exact = dc && lt.records.find((r) => String(formatDisplay(store, lt, r, dc)).toLowerCase() === needle.toLowerCase());
+      if (exact) return exact.id;
+      const scope = col.link.searchScope || (col.type === 'search' ? 'row' : 'column');
+      const matchCol = findColumn(lt, col.link.searchColumnId || col.link.matchColumnId || col.link.displayColumnId) || dc;
+      const hits = lt.records.filter((r) => {
+        if (scope === 'row') {
+          return lt.columns.some((c) => recipeTextMatch(needle, formatDisplay(store, lt, r, c), 'contains') || recipeTextMatch(needle, rawStored(r, c), 'contains'));
+        }
+        if (!matchCol) return false;
+        return recipeTextMatch(needle, formatDisplay(store, lt, r, matchCol), 'contains') || recipeTextMatch(needle, rawStored(r, matchCol), 'contains');
+      });
+      if (hits.length === 1) return hits[0].id;
+      const starts = dc ? hits.filter((r) => String(formatDisplay(store, lt, r, dc)).toLowerCase().indexOf(needle.toLowerCase()) === 0) : [];
+      if (starts.length === 1) return starts[0].id;
+      return '';
+    }
+
+    function coerceRecipeCell(store, col, field, raw) {
+      let val = resolveRecipeFill(store, field, raw);
+      if (col && isLinkCol(col)) val = matchLinkedRecord(store, col, val);
+      return val;
+    }
+
     function guessTransform(s) {
       const t = String(s || '').trim();
       if (/^\d{1,2}[-./]\d{1,2}[-./]\d{2,4}$/.test(t)) return 'date-dk';
@@ -6507,6 +6538,7 @@
           if (lab && sample.toLowerCase().indexOf(lab.toLowerCase()) === 0) {
             sample = sample.slice(lab.length).replace(/^[\s:]+/, '') || sample;
           }
+          const mapCol = this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
           const map = {
             id: uid('map'),
             columnId: this.recipeTeach.colId,
@@ -6516,8 +6548,16 @@
             sample,
             label: lab,
             transform: guessTransform(sample),
-            fill: 'pdf'
+            fill: isLinkCol(mapCol) ? 'lookup' : 'pdf'
           };
+          if (isLinkCol(mapCol) && mapCol.link) {
+            map.lookup = {
+              tableId: mapCol.link.tableId,
+              matchColumnId: mapCol.link.searchColumnId || mapCol.link.matchColumnId || mapCol.link.displayColumnId,
+              out: 'link',
+              match: 'contains'
+            };
+          }
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
           this.recipeDraft.maps = this.recipeDraft.maps.filter((m) => !(m.columnId === map.columnId && m.role === map.role));
           this.recipeDraft.maps.push(map);
@@ -6704,13 +6744,13 @@
             (recipe.headerFields || []).forEach((f) => {
               const col = findColumn(headerTable, f.columnId);
               const raw = f.fill === 'fixed' ? f.fixed : recipeFieldValue(doc.text, f);
-              const val = resolveRecipeFill(this.store, f, raw);
+              const val = coerceRecipeCell(this.store, col, f, raw);
               if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
             });
             Object.keys(click.header).forEach((colId) => {
               const col = findColumn(headerTable, colId);
               const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role !== 'line');
-              const val = resolveRecipeFill(this.store, map || { fill: 'pdf' }, click.header[colId]);
+              const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, click.header[colId]);
               if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
             });
             if (recipe.statusColumnId && recipe.statusValue) {
@@ -6749,7 +6789,7 @@
                 Object.keys(row).forEach((colId) => {
                   const col = findColumn(lineTable, colId);
                   const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role === 'line');
-                  const val = resolveRecipeFill(this.store, map || { fill: 'pdf' }, row[colId]);
+                  const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, row[colId]);
                   if (col && val !== '' && val != null) this.setCell(lr, col, val, true, lineTable);
                 });
               });
@@ -6766,7 +6806,7 @@
                   const col = findColumn(lineTable, f.columnId);
                   if (!col) return;
                   const raw = f.fill === 'fixed' ? f.fixed : transformRecipeValue(m[f.group], f.transform);
-                  const val = resolveRecipeFill(this.store, f, raw);
+                  const val = coerceRecipeCell(this.store, col, f, raw);
                   if (val !== '' && val != null) this.setCell(lr, col, val, true, lineTable);
                 });
               });
@@ -7030,6 +7070,10 @@
           if (resolveRecipeFill(lkWs, prodF, '306832') !== 'rec_prod_snaps') console.warn('product sku lookup failed');
           const fixF = remR.headerFields.find((f) => f.fill === 'fixed');
           if (resolveRecipeFill(lkWs, fixF, '') !== 'Draft') console.warn('fixed recipe fill failed');
+          const ord = lkWs.tables.find((x) => x.name === 'Orders');
+          const custCol = ord.columns.find((c) => c.name === 'Customer');
+          if (matchLinkedRecord(lkWs, custCol, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('search column PDF match failed');
+          if (coerceRecipeCell(lkWs, custCol, { fill: 'pdf' }, 'REMA Grønt') !== 'rec_cust_rema') console.warn('coerce search cell failed');
           const spec = snapshotCellRule(cust2.records[0], city2);
           spec.rule.formula = { expression: 'XLOOKUP(C1, "Products", "Item No", "Name")', resultType: 'auto' };
           const shifted = shiftA1InText(spec.rule.formula.expression, 1, 0);
