@@ -86,10 +86,8 @@
     .search-combo input { flex: 1; min-width: 0; }
     .search-combo .sq { width: 28px; display: inline-flex; align-items: center; justify-content: center; border-left: 1px solid #223250; color: #8ea0be; background: #10192c; flex-shrink: 0; }
     .search-combo .sq:hover { color: #3ecfbe; }
-    .tear-bar { cursor: grab; user-select: none; }
-    .tear-bar:active { cursor: grabbing; }
     .attach-chip { display: flex; align-items: center; gap: 4px; min-width: 0; }
-    .paper-doc { flex-shrink: 0; width: 22px; height: 28px; padding: 0; border: 0; background: transparent; line-height: 0; cursor: pointer; }
+    .paper-doc { flex-shrink: 0; width: 22px; height: 28px; padding: 0; border: 0; background: transparent; line-height: 0; cursor: pointer; -webkit-user-drag: none; user-select: none; }
     .paper-doc svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 1px 1px rgba(0,0,0,.35)); }
     .paper-doc:hover svg { filter: drop-shadow(0 0 4px rgba(62,207,190,.45)); }
     .paper-doc.empty { opacity: .55; }
@@ -139,6 +137,9 @@
     .pdf-teach .pdf-hit:hover { background: rgba(245, 185, 66, 0.35); outline: 1px solid #f5b942; }
     .pdf-hit.mapped { outline: 1px solid #3ecfbe; background: rgba(62, 207, 190, 0.2); }
     .pdf-hit.pick { cursor: pointer; }
+    .panel-head { user-select: none; }
+    .panel-head.grab { cursor: grab; }
+    .panel-head.grab:active, .panel-head.grabbing { cursor: grabbing; }
   </style>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsuites@5.9.0/dist/jsuites.min.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jspreadsheet-ce@4.15.0/dist/jspreadsheet.min.css" />
@@ -275,7 +276,7 @@
           Repeats on each line
         </label>
         <span class="opacity-80">{{ teachHintText }}</span>
-        <button v-if="!panelMode && !undocked.docs" class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="popOutPanel('docs')">Pop out PDF</button>
+        <button v-if="!panelMode && !undocked.docs" class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="popOutPanel('docs')">Move to other monitor</button>
         <button class="ml-auto rounded-md bg-ink-900 text-gold px-2 py-1 text-[12px] font-semibold" @click="saveRecipe">Save recipe</button>
         <button class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="stopRecipeTeach">Done</button>
       </div>
@@ -379,7 +380,7 @@
 
         <!-- Split document pane -->
         <section v-if="docsPaneVisible" class="shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-line bg-ink-900 md:min-w-[240px]" :class="panelMode==='docs' && 'flex-1 min-w-0 border-0'" :style="splitPaneStyle">
-          <div class="h-10 shrink-0 border-b border-line flex items-center gap-2 px-2 tear-bar" title="Drag this bar to open a window on another monitor" @mousedown="startDocsTear">
+          <div class="h-10 shrink-0 border-b border-line flex items-center gap-2 px-2 panel-head">
             <div class="text-xs font-medium truncate">Source document</div>
             <div class="ml-auto flex items-center gap-1">
               <label class="text-[11px] rounded-md px-2 py-1 bg-ink-700 cursor-pointer hover:brightness-110">
@@ -387,13 +388,12 @@
                 <input type="file" class="hidden" multiple accept=".pdf,image/*,.txt,.edi,.x12,.csv,.json,text/plain" @change="onFileInput" />
               </label>
               <button v-if="activeDoc" class="text-[11px] rounded-md px-2 py-1 bg-ink-700 hover:brightness-110" title="Open full-size reader" @click="openDocReader">Read large</button>
-              <button v-if="!panelMode" class="text-[11px] rounded-md px-2 py-1 bg-ink-700 hover:brightness-110" title="Move this panel to another window or monitor" @click="popOutPanel('docs')">Pop out</button>
-              <button v-if="activeDoc && panelMode!=='docs'" class="p-1 text-mute hover:text-white" title="Open in a new window" @click="openDocPopout"><icon name="external" size="14"></icon></button>
+              <button v-if="!panelMode" class="text-[11px] rounded-md px-2 py-1 bg-gold text-ink-900 font-semibold hover:brightness-110" title="Open a real window you can put on another screen" @click="popOutPanel('docs')">Move to other monitor</button>
               <button v-if="!panelMode" class="p-1 text-mute hover:text-white" title="Close documents" @click="splitOpen=false"><icon name="x" size="14" /></button>
             </div>
           </div>
           <div v-if="docs.length" class="flex gap-1 px-2 py-1 border-b border-line overflow-x-auto">
-            <button v-for="d in docs" :key="d.id" @click="activeDocId=d.id" class="text-[11px] px-2 py-1 rounded-md shrink-0 max-w-[140px] truncate"
+            <button v-for="d in docs" :key="d.id" type="button" draggable="false" @click="activeDocId=d.id" class="text-[11px] px-2 py-1 rounded-md shrink-0 max-w-[140px] truncate"
               :class="d.id===activeDocId ? 'bg-ink-700 text-white' : 'text-mute hover:bg-ink-800'">
               {{ d.name }}
             </button>
@@ -935,9 +935,8 @@
       </modal-frame>
 
       <!-- Client recipes -->
-      <modal-frame v-if="recipeOpen && recipesPaneVisible" title="Client order recipes" wide detachable :page="panelMode==='recipes'" @close="closeRecipesPane" @detach="popOutPanel('recipes')">
-        <p class="text-sm text-mute mb-3">Unlock Architect, open a PDF with <strong class="text-mist">Docs → Open file</strong>, then <strong class="text-mist">Teach on PDF</strong>: pick a column and click that value on the page. You can still type regex below if you prefer.
-          Drag the gold title bar, or <strong class="text-mist">Move to other monitor</strong>, to open a real window you can put on a second screen (a dialog cannot leave this Chrome window).
+      <modal-frame v-if="recipeOpen && recipesPaneVisible" title="Client order recipes" wide :page="panelMode==='recipes'" :undock="!panelMode" @undock="popOutPanel('recipes')" @close="closeRecipesPane">
+        <p class="text-sm text-mute mb-3">Unlock Architect, open a PDF with <strong class="text-mist">Docs → Open file</strong>, then <strong class="text-mist">Teach on PDF</strong>: pick a column and click that value on the page. You can still type regex below if you prefer. Drag the title bar to move this dialog. Use <strong class="text-mist">Move to other monitor</strong> for a real window you can put on a second screen (a dialog cannot leave this Chrome window).
         </p>
         <div v-if="mode!=='architect'" class="mb-3 rounded-lg border border-gold/40 bg-gold/10 px-3 py-2 text-sm text-gold">
           You are in Operator Mode, so recipes are read-only. Click <strong class="text-white">Architect</strong> in the top bar and enter your PIN to add, edit, or delete recipes.
@@ -1263,10 +1262,11 @@
       </modal-frame>
 
       <!-- Large document reader -->
-      <div v-if="docReaderOpen && readerDoc" class="fixed inset-0 z-[75] bg-ink-950 flex flex-col" @keydown.esc.prevent="closeDocReader">
-        <div class="h-12 shrink-0 border-b border-line flex items-center gap-2 px-3">
+      <div v-if="docReaderOpen && readerDoc" class="fixed inset-0 z-[75] bg-black/55 flex items-stretch justify-center p-3 md:p-6" @click.self="closeDocReader" @keydown.esc.prevent="closeDocReader">
+        <div class="bg-ink-950 border border-line shadow-panel flex flex-col min-h-0 w-full max-w-[1200px] rounded-2xl overflow-hidden" :style="readerBoxStyle">
+        <div class="h-12 shrink-0 border-b border-line flex items-center gap-2 px-3 panel-head grab" :class="readerDragging && 'grabbing'" @pointerdown="onReaderHeadDown">
           <div class="text-sm font-medium truncate">{{ readerDoc.name }}</div>
-          <span class="text-[11px] text-mute hidden sm:inline">Full-size reader — zoom or open in a new window for the clearest view.</span>
+          <span class="text-[11px] text-mute hidden sm:inline">Drag the title bar to move. Use Move to other monitor for a second screen.</span>
           <div class="ml-auto flex items-center gap-1">
             <template v-if="readerDoc.kind==='pdf'">
               <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line" @click="nudgePdfZoom(-25)">−</button>
@@ -1279,19 +1279,19 @@
               <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line" @click="imgZoom=1">Fit</button>
               <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line" @click="imgZoom=Math.min(4, imgZoom+.15)">+</button>
             </template>
-            <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line inline-flex items-center gap-1" @click="popOutPanel('docs'); closeDocReader()">
-              <icon name="external" size="12"></icon>
-              <span>Pop out</span>
+            <button v-if="!panelMode" class="text-[11px] rounded-md px-2 py-1 bg-gold text-ink-900 font-semibold inline-flex items-center gap-1" @click="popOutPanel('docs'); closeDocReader()">
+              Move to other monitor
             </button>
-            <button class="text-[11px] rounded-md px-2 py-1 bg-gold text-ink-900 font-semibold" @click="closeDocReader">Close</button>
+            <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line" @click="closeDocReader">Close</button>
           </div>
         </div>
-        <div class="flex-1 min-h-0 bg-ink-900">
+        <div class="flex-1 min-h-0 bg-ink-900 min-h-[60vh]">
           <iframe v-if="readerDoc.kind==='pdf'" :key="'reader-'+pdfViewerSrc" :src="pdfViewerSrc" class="w-full h-full bg-white" title="PDF reader"></iframe>
           <div v-else-if="readerDoc.kind==='image'" class="h-full overflow-auto grid place-items-center bg-ink-950 p-6">
             <img :src="readerDoc.preview || readerDoc.url" :alt="readerDoc.name" class="max-w-none shadow-panel" :style="{ transform: 'scale(' + imgZoom + ')', transformOrigin: 'center top' }" />
           </div>
           <pre v-else class="h-full overflow-auto p-6 text-sm font-mono leading-relaxed whitespace-pre-wrap">{{ readerDoc.text }}</pre>
+        </div>
         </div>
       </div>
 
@@ -3094,7 +3094,7 @@
     function attachSheetHtml(meta, locked) {
       if (meta) {
         return '<div class="attach-chip sheet-attach">'
-          + '<button type="button" class="paper-doc" data-fg-act="open" title="' + escapeAttr('Open beside this row — ' + meta.name) + '">' + PAPER_DOC_SVG + '</button>'
+          + '<button type="button" class="paper-doc" draggable="false" data-fg-act="open" title="' + escapeAttr('Open beside this row — ' + meta.name) + '">' + PAPER_DOC_SVG + '</button>'
           + '<button type="button" class="act open" data-fg-act="open" title="Open beside this row">' + attachActSvg('<path d="M3 5h18v14H3zM9 5v14"/>') + '</button>'
           + '<button type="button" class="act" data-fg-act="popout" title="Open in a new window">' + attachActSvg('<path d="M14 5h5v5"/><path d="M10 14L19 5"/><path d="M19 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/>') + '</button>'
           + '<button type="button" class="act edit" data-fg-act="pick"' + (locked ? ' disabled' : '') + ' title="' + (locked ? 'Unlock the row to replace this file' : 'Replace file') + '">' + attachActSvg('<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>') + '</button>'
@@ -3217,51 +3217,55 @@
     };
 
     const ModalFrame = {
-      props: { title: String, wide: Boolean, page: Boolean, detachable: Boolean },
-      emits: ['close', 'detach'],
-      data() { return { pos: { x: 0, y: 0 }, start: null }; },
+      props: { title: String, wide: Boolean, page: Boolean, undock: Boolean },
+      emits: ['close', 'undock'],
+      data() {
+        return { left: null, top: null, dragging: false, _drag: null };
+      },
       computed: {
+        boxClass() {
+          if (this.page) return 'flex-1 rounded-none border-0 shadow-none';
+          return this.wide ? 'max-w-3xl rounded-2xl' : 'max-w-lg rounded-2xl';
+        },
         boxStyle() {
-          if (this.page) return {};
-          if (!this.pos.x && !this.pos.y) return {};
-          return { transform: 'translate(' + this.pos.x + 'px,' + this.pos.y + 'px)' };
+          if (this.page || this.left == null) return {};
+          return { position: 'fixed', left: this.left + 'px', top: this.top + 'px', margin: 0 };
         }
       },
       methods: {
-        startTear(e) {
-          if (!this.detachable || this.page || e.button !== 0) return;
-          if (e.target.closest && e.target.closest('button')) return;
+        onHeadDown(e) {
+          if (this.page || e.button !== 0) return;
+          if (e.target.closest('button, a, input, select, textarea, label')) return;
+          const box = this.$refs.box.getBoundingClientRect();
+          this.left = box.left;
+          this.top = box.top;
+          this.dragging = true;
+          this._drag = { dx: e.clientX - box.left, dy: e.clientY - box.top, w: box.width, h: box.height };
           e.preventDefault();
-          this.start = { x: e.clientX, y: e.clientY, px: this.pos.x, py: this.pos.y };
-          window.addEventListener('mousemove', this.onTearMove);
-          window.addEventListener('mouseup', this.endTear);
+          window.addEventListener('pointermove', this.onHeadMove);
+          window.addEventListener('pointerup', this.onHeadUp);
         },
-        onTearMove(e) {
-          if (!this.start) return;
-          const dx = e.clientX - this.start.x;
-          const dy = e.clientY - this.start.y;
-          this.pos = { x: this.start.px + dx, y: this.start.py + dy };
-          if (Math.hypot(dx, dy) > 88) {
-            this.endTear();
-            this.$emit('detach');
-          }
+        onHeadMove(e) {
+          if (!this._drag) return;
+          const w = this._drag.w;
+          this.left = Math.max(12 - w + 96, Math.min(window.innerWidth - 96, e.clientX - this._drag.dx));
+          this.top = Math.max(8, Math.min(window.innerHeight - 48, e.clientY - this._drag.dy));
         },
-        endTear() {
-          this.start = null;
-          window.removeEventListener('mousemove', this.onTearMove);
-          window.removeEventListener('mouseup', this.endTear);
+        onHeadUp() {
+          this.dragging = false;
+          this._drag = null;
+          window.removeEventListener('pointermove', this.onHeadMove);
+          window.removeEventListener('pointerup', this.onHeadUp);
         }
       },
-      unmounted() { this.endTear(); },
+      beforeUnmount() { this.onHeadUp(); },
       template: `
         <div :class="page ? 'flex-1 min-h-0 flex flex-col bg-ink-900' : 'fixed inset-0 z-[70] flex items-start justify-center p-4 md:p-8 bg-black/55'" @click.self="page ? undefined : $emit('close')">
-          <div class="w-full border border-line bg-ink-850 shadow-panel flex flex-col min-h-0" :class="page ? 'flex-1 rounded-none border-0 shadow-none' : (wide ? 'max-w-3xl rounded-2xl' : 'max-w-lg rounded-2xl')" :style="boxStyle" @click.stop>
-            <div class="px-4 py-3 border-b border-line flex items-center justify-between shrink-0 gap-2" :class="detachable && !page && 'tear-bar'" @mousedown="startTear">
-              <h3 class="font-semibold min-w-0 truncate">{{ title }}</h3>
-              <div class="flex items-center gap-1 shrink-0">
-                <button v-if="detachable && !page" type="button" class="text-[11px] rounded-md bg-gold text-ink-900 font-semibold px-2 py-1" @click="$emit('detach')" title="Opens a real Chrome window you can drag onto another monitor">Move to other monitor</button>
-                <button class="text-mute hover:text-white" @click="$emit('close')"><icon name="x" /></button>
-              </div>
+          <div ref="box" class="w-full border border-line bg-ink-850 shadow-panel flex flex-col min-h-0" :class="boxClass" :style="boxStyle" @click.stop>
+            <div class="px-4 py-3 border-b border-line flex items-center gap-2 shrink-0 panel-head" :class="!page && (dragging ? 'grabbing' : 'grab')" @pointerdown="onHeadDown">
+              <h3 class="font-semibold min-w-0 truncate flex-1">{{ title }}</h3>
+              <button v-if="undock && !page" type="button" class="rounded-md bg-gold text-ink-900 font-semibold px-2 py-1 text-[12px] shrink-0" title="Open a real window you can put on another screen" @click.stop="$emit('undock')">Move to other monitor</button>
+              <button type="button" class="text-mute hover:text-white shrink-0" @click="$emit('close')"><icon name="x" /></button>
             </div>
             <div class="p-4 overflow-y-auto" :class="page ? 'flex-1 min-h-0' : 'max-h-[min(72vh,560px)]'"><slot /></div>
           </div>
@@ -3320,7 +3324,7 @@
           @dragleave="hovering=false"
           @drop.prevent="onDrop">
           <input ref="file" type="file" class="hidden" @change="onFile" />
-          <button v-if="meta" type="button" class="paper-doc" :title="'Open beside this row — ' + meta.name" @click="open(false)">
+          <button v-if="meta" type="button" class="paper-doc" draggable="false" :title="'Open beside this row — ' + meta.name" @click="open(false)">
             <svg viewBox="0 0 32 40" aria-hidden="true">
               <path d="M5 2.5h14.5L29 12v24.5A2.5 2.5 0 0 1 26.5 39h-21A2.5 2.5 0 0 1 3 36.5v-32A2.5 2.5 0 0 1 5.5 2.5H5z" fill="#f4f1e8"/>
               <path d="M19.5 2.5V11a1 1 0 0 0 1 1H29" fill="#d8d2c3"/>
@@ -3765,6 +3769,9 @@
           imgZoom: 1,
           pdfZoom: 'page-width',
           docReaderOpen: false,
+          readerLeft: null,
+          readerTop: null,
+          readerDragging: false,
           attachPreview: null,
           moreOpen: false,
           pinOpen: false,
@@ -4097,6 +4104,10 @@
         },
         pdfClickReady() {
           return !!(this.recipeTeach.active && this.pdfView.pages && this.pdfView.pages.length);
+        },
+        readerBoxStyle() {
+          if (this.readerLeft == null) return {};
+          return { position: 'fixed', left: this.readerLeft + 'px', top: this.readerTop + 'px', width: 'min(1200px, calc(100vw - 24px))', height: 'min(90vh, 900px)', maxWidth: 'none', margin: 0 };
         },
         pdfViewerSrc() {
           const d = this.readerDoc;
@@ -6495,37 +6506,44 @@
         rememberUndock() {
           try { sessionStorage.setItem(UNDOCK_SESSION, JSON.stringify(this.undocked)); } catch (e) {}
         },
-        startDocsTear(e) {
-          if (this.panelMode || e.button !== 0) return;
-          if (e.target.closest && e.target.closest('button,label,input,select')) return;
-          const x0 = e.clientX, y0 = e.clientY;
-          const move = (ev) => {
-            if (Math.hypot(ev.clientX - x0, ev.clientY - y0) > 72) {
-              window.removeEventListener('mousemove', move);
-              window.removeEventListener('mouseup', up);
-              this.popOutPanel('docs');
+        async popupPlacement(width, height) {
+          let left = Math.round((window.screenX || window.screenLeft || 0) + Math.max(80, (window.outerWidth || 900) * 0.55));
+          let top = Math.round((window.screenY || window.screenTop || 0) + 48);
+          let w = width;
+          let h = height;
+          try {
+            if (window.getScreenDetails) {
+              const details = await window.getScreenDetails();
+              const cur = details.currentScreen;
+              const other = (details.screens || []).find((s) => s && cur && (s.left !== cur.left || s.top !== cur.top));
+              if (other) {
+                left = (other.availLeft || other.left || 0) + 40;
+                top = (other.availTop || other.top || 0) + 40;
+                w = Math.min(width, (other.availWidth || other.width || width) - 80);
+                h = Math.min(height, (other.availHeight || other.height || height) - 80);
+              }
             }
-          };
-          const up = () => {
-            window.removeEventListener('mousemove', move);
-            window.removeEventListener('mouseup', up);
-          };
-          window.addEventListener('mousemove', move);
-          window.addEventListener('mouseup', up);
+          } catch (e) {}
+          return { left, top, width: Math.round(w), height: Math.round(h) };
         },
-        popOutPanel(name) {
+        async openPopupWindow(url, name, width, height) {
+          const p = await this.popupPlacement(width, height);
+          const feat = 'popup=yes,resizable=yes,scrollbars=yes,width=' + p.width + ',height=' + p.height + ',left=' + p.left + ',top=' + p.top;
+          const w = window.open(url, name, feat);
+          if (w) {
+            try { w.focus(); } catch (e) {}
+            return w;
+          }
+          return null;
+        },
+        async popOutPanel(name) {
           const u = new URL(location.href);
           u.searchParams.set('panel', name);
-          const wSize = name === 'docs' ? 980 : 920;
-          const hSize = name === 'docs' ? 1100 : 980;
-          const left = Math.round((window.screenX || window.screenLeft || 0) + Math.max(80, (window.outerWidth || 900) * 0.55));
-          const top = Math.round((window.screenY || window.screenTop || 0) + 48);
-          const feat = 'popup=true,resizable=yes,scrollbars=yes,width=' + wSize + ',height=' + hSize + ',left=' + left + ',top=' + top;
-          const w = window.open(u.toString(), 'fg_' + name + '_' + Date.now(), feat);
+          const size = name === 'docs' ? { w: 980, h: 1100 } : { w: 920, h: 980 };
+          const w = await this.openPopupWindow(u.toString(), 'forgegrid-' + name, size.w, size.h);
           if (!w) {
             return this.toast('Allow pop-ups for this site. Chrome will not let a dialog be dragged onto another monitor — it must open as its own window.', 'warn');
           }
-          try { w.focus(); } catch (e) {}
           this.popouts[name] = w;
           this.undocked[name] = true;
           this.rememberUndock();
@@ -6534,7 +6552,7 @@
             this.docReaderOpen = false;
           }
           if (name === 'recipes') this.recipeOpen = false;
-          this.toast('Drag that new window’s title bar onto the other monitor.');
+          this.toast('That is a real window — drag its title bar onto the other monitor. Clicks on the PDF still map here.');
           setTimeout(() => this.sendUndockPdf(), 400);
         },
         dockPanel(name) {
@@ -6692,7 +6710,33 @@
         },
         openDocReader() {
           if (!this.readerDoc) return this.toast('Open a document first.', 'warn');
+          this.readerLeft = null;
+          this.readerTop = null;
           this.docReaderOpen = true;
+        },
+        onReaderHeadDown(e) {
+          if (e.button !== 0) return;
+          if (e.target.closest('button, a, input, select, textarea, label')) return;
+          const box = e.currentTarget.parentElement.getBoundingClientRect();
+          this.readerLeft = box.left;
+          this.readerTop = box.top;
+          this.readerDragging = true;
+          this._readerDrag = { dx: e.clientX - box.left, dy: e.clientY - box.top, w: box.width };
+          e.preventDefault();
+          window.addEventListener('pointermove', this.onReaderHeadMove);
+          window.addEventListener('pointerup', this.onReaderHeadUp);
+        },
+        onReaderHeadMove(e) {
+          if (!this._readerDrag) return;
+          const w = this._readerDrag.w;
+          this.readerLeft = Math.max(12 - w + 96, Math.min(window.innerWidth - 96, e.clientX - this._readerDrag.dx));
+          this.readerTop = Math.max(8, Math.min(window.innerHeight - 48, e.clientY - this._readerDrag.dy));
+        },
+        onReaderHeadUp() {
+          this.readerDragging = false;
+          this._readerDrag = null;
+          window.removeEventListener('pointermove', this.onReaderHeadMove);
+          window.removeEventListener('pointerup', this.onReaderHeadUp);
         },
         closeDocReader() {
           this.docReaderOpen = false;
@@ -6744,12 +6788,12 @@
             } catch (e) {}
           }
           if (popout) {
-            const w = window.open(url, '_blank', 'noopener,noreferrer');
+            const w = await this.openPopupWindow(url, 'forgegrid-file-' + meta.id, 980, 1100);
             if (!w) {
               const a = document.createElement('a');
               a.href = url; a.download = meta.name; a.click();
             }
-            this.toast('Row is open in the form. The file is in a new window — check them side by side.');
+            this.toast('Row is open in the form. The file is in a window you can drag to another monitor.');
             return;
           }
           await this.showAttachmentDoc(meta, url, kind, text);
@@ -7825,6 +7869,7 @@
         window.removeEventListener('keydown', this.onWinKey);
         window.removeEventListener('storage', this.onWorkspaceStorage);
         window.removeEventListener('beforeunload', this.onPanelUnload);
+        this.onReaderHeadUp();
         if (this._popWatch) clearInterval(this._popWatch);
         if (this._undockCh) try { this._undockCh.close(); } catch (e) {}
         this.destroySheet();
