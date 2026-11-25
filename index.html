@@ -2949,20 +2949,54 @@
       return best;
     }
 
+    function pdfItemText(it) {
+      return String(it && it.str != null ? it.str : '').replace(/\s+/g, ' ').trim();
+    }
+
+    function pdfRectOverlap(a, b) {
+      const x = Math.max(0, Math.min(a.nx + a.nw, b.nx + b.nw) - Math.max(a.nx, b.nx));
+      const y = Math.max(0, Math.min(a.ny + a.nh, b.ny + b.nh) - Math.max(a.ny, b.ny));
+      return x * y;
+    }
+
     function readClickMap(pages, map) {
       const sample = String(map.sample || '').trim();
       const page = pages[(map.page || 1) - 1];
       if (!page) return sample;
       const items = page.items || [];
-      const hit = nearestPdfItem(items, map.nx + map.nw / 2, map.ny + map.nh / 2, 0.08, 0.045);
-      if (hit && String(hit.str || '').trim()) return String(hit.str).replace(/\s+/g, ' ').trim();
+      const box = { nx: map.nx, ny: map.ny, nw: Math.max(map.nw || 0, 0.004), nh: Math.max(map.nh || 0, 0.006) };
+      const cx = box.nx + box.nw / 2;
+      const cy = box.ny + box.nh / 2;
+      const lineH = Math.max(box.nh, 0.012);
+      function score(it) {
+        const str = pdfItemText(it);
+        if (!str) return -1e9;
+        const ov = pdfRectOverlap(box, it);
+        const dx = Math.abs((it.nx + it.nw / 2) - cx);
+        const dy = Math.abs((it.ny + it.nh / 2) - cy);
+        let s = ov * 4000 - dy * 80 - dx * 12;
+        if (sample && str === sample) s += 200;
+        else if (sample && str.indexOf(sample) >= 0) s += 40;
+        return s;
+      }
+      const overlapping = items.filter((it) => pdfRectOverlap(box, it) > 0);
+      const sameLine = items.filter((it) => {
+        const dy = Math.abs((it.ny + it.nh / 2) - cy);
+        const dx = Math.abs((it.nx + it.nw / 2) - cx);
+        return dy <= lineH && dx <= Math.max(box.nw * 1.5, 0.05);
+      });
+      const pool = overlapping.length ? overlapping : sameLine;
+      let best = null;
+      let bestS = -1e9;
+      pool.forEach((it) => {
+        const s = score(it);
+        if (s > bestS) { bestS = s; best = it; }
+      });
+      if (best && pdfItemText(best)) return pdfItemText(best);
       if (sample) {
-        const same = items.filter((it) => String(it.str || '').replace(/\s+/g, ' ').trim() === sample);
-        if (same.length === 1) return sample;
-        if (same.length > 1) {
-          const near = nearestPdfItem(same, map.nx + map.nw / 2, map.ny + map.nh / 2, 1, 1);
-          if (near) return String(near.str).trim();
-        }
+        const same = items.filter((it) => pdfItemText(it) === sample);
+        const near = nearestPdfItem(same, cx, cy, 0.15, lineH * 1.5);
+        if (near) return sample;
       }
       return sample;
     }
@@ -7040,7 +7074,7 @@
                 nh: r.h / viewport.height
               });
             });
-            const items = this.recipeTeach.active ? explodePdfWords(mapped) : mapped;
+            const items = explodePdfWords(mapped);
             pages.push({ num: p, width: viewport.width, height: viewport.height, items, viewport, page });
           }
           doc._pdfPages = pages;
@@ -7669,6 +7703,17 @@
           if (resolveRecipeFill(lkWs, packedRight, '888777') !== 'rec_packed_flow') console.warn('chosen Packed Products + Customer Product Code should match');
           const fakeProd = { name: 'Product', type: 'text' };
           if (String(coerceRecipeCell(lkWs, fakeProd, { fill: 'pdf' }, '306832')) !== '306832') console.warn('text Product should keep the mapped SKU');
+          const stackedPages = [{ num: 1, items: [
+            { str: '76425051', nx: 0.50, ny: 0.20, nw: 0.12, nh: 0.018 },
+            { str: 'K0428144', nx: 0.50, ny: 0.24, nw: 0.12, nh: 0.018 }
+          ] }];
+          const refMap = { page: 1, nx: 0.50, ny: 0.24, nw: 0.12, nh: 0.018, sample: 'K0428144', fill: 'pdf', role: 'header', columnId: 'col_ref' };
+          if (readClickMap(stackedPages, refMap) !== 'K0428144') console.warn('header map must keep the clicked token, not the line above', readClickMap(stackedPages, refMap));
+          const newPdfPages = [{ num: 1, items: [
+            { str: '11111111', nx: 0.50, ny: 0.20, nw: 0.12, nh: 0.018 },
+            { str: 'K0999999', nx: 0.50, ny: 0.24, nw: 0.12, nh: 0.018 }
+          ] }];
+          if (readClickMap(newPdfPages, refMap) !== 'K0999999') console.warn('same box on a new PDF should read that token', readClickMap(newPdfPages, refMap));
           const spec = snapshotCellRule(cust2.records[0], city2);
           spec.rule.formula = { expression: 'XLOOKUP(C1, "Products", "Item No", "Name")', resultType: 'auto' };
           const shifted = shiftA1InText(spec.rule.formula.expression, 1, 0);
