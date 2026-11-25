@@ -2738,20 +2738,7 @@
 
     function coerceRecipeCell(store, col, field, raw) {
       let val = resolveRecipeFill(store, field, raw);
-      if (col && isLinkCol(col)) {
-        val = matchLinkedRecord(store, col, val);
-        return val;
-      }
-      const fill = (field && field.fill) || 'pdf';
-      if (fill === 'pdf' && col && val !== '' && val != null) {
-        const t = tableForColumnHint(store, col);
-        const hit = t && scanTableForNeedle(store, t, val);
-        if (hit) {
-          if (/sku|item\s*no|varenr|ean|code/i.test(col.name || '')) return val;
-          const name = displayNameOfRecord(store, t, hit);
-          if (name) return name;
-        }
-      }
+      if (col && isLinkCol(col)) val = matchLinkedRecord(store, col, val);
       return val;
     }
 
@@ -2832,10 +2819,11 @@
     }
 
     function readClickMap(pages, map) {
-      const page = pages[(map.page || 1) - 1];
-      if (!page) return '';
-      const items = page.items || [];
       const sample = String(map.sample || '').trim();
+      if (map.role !== 'line' && sample) return sample;
+      const page = pages[(map.page || 1) - 1];
+      if (!page) return sample;
+      const items = page.items || [];
       if (sample) {
         const same = items.filter((it) => String(it.str || '').replace(/\s+/g, ' ').trim() === sample);
         if (same.length === 1) return sample;
@@ -2844,20 +2832,8 @@
           if (hit) return String(hit.str).trim();
         }
       }
-      const label = String(map.label || '').trim();
-      if (label) {
-        const labs = items.filter((it) => String(it.str).replace(/\s+/g, ' ').trim().toLowerCase() === label.toLowerCase());
-        labs.sort((a, b) => Math.abs((a.ny + a.nh / 2) - (map.ny + map.nh / 2)) - Math.abs((b.ny + b.nh / 2) - (map.ny + map.nh / 2)));
-        const L = labs[0];
-        if (L) {
-          const cy = L.ny + L.nh / 2;
-          const right = items.filter((it) => it !== L && String(it.str).trim() && Math.abs((it.ny + it.nh / 2) - cy) < 0.015 && it.nx >= L.nx + L.nw - 0.01)
-            .sort((a, b) => a.nx - b.nx);
-          if (right[0]) return String(right[0].str).trim();
-        }
-      }
       const hit = nearestPdfItem(items, map.nx + map.nw / 2, map.ny + map.nh / 2, 0.08, 0.04);
-      return hit ? String(hit.str).trim() : '';
+      return hit ? String(hit.str).trim() : sample;
     }
 
     function extractFromMaps(pages, recipe) {
@@ -7279,7 +7255,7 @@
           const lineProdCol = linesT.columns.find((c) => c.name === 'Product');
           if (matchLinkedRecord(lkWs, lineProdCol, '306832') !== 'rec_prod_snaps') console.warn('product SKU link match failed');
           const fakeProd = { name: 'Product', type: 'text' };
-          if (String(coerceRecipeCell(lkWs, fakeProd, { fill: 'pdf' }, '306832')).toLowerCase().indexOf('sugar') < 0) console.warn('product SKU should fill product name');
+          if (String(coerceRecipeCell(lkWs, fakeProd, { fill: 'pdf' }, '306832')) !== '306832') console.warn('text Product should keep the mapped SKU');
           const spec = snapshotCellRule(cust2.records[0], city2);
           spec.rule.formula = { expression: 'XLOOKUP(C1, "Products", "Item No", "Name")', resultType: 'auto' };
           const shifted = shiftA1InText(spec.rule.formula.expression, 1, 0);
