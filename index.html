@@ -3294,6 +3294,50 @@
         || null;
     }
 
+    function isPackedProductCol(col) {
+      return !!(col && /packed\s*product/i.test(col.name || ''));
+    }
+
+    function isPackedProductTable(table) {
+      return !!(table && /packed/i.test(table.name || ''));
+    }
+
+    function packedProductTables(store) {
+      return (store.tables || []).filter((t) => isPackedProductTable(t));
+    }
+
+    function preferredPackedLookup(store, col, field) {
+      if (!isPackedProductCol(col)) return field;
+      const chosen = field && field.lookup && findTable(store, field.lookup.tableId);
+      const hint = tableForColumnHint(store, col);
+      const packedSheets = packedProductTables(store);
+      const withRows = packedSheets.find((t) => (t.records || []).length);
+      const table = (chosen && isPackedProductTable(chosen) && (chosen.records || []).length && chosen)
+        || hint
+        || withRows
+        || packedSheets[0]
+        || chosen
+        || null;
+      if (!table) return field;
+      const skuCol = skuLikeColumns(table)[0];
+      const nameCol = (table.columns || []).find((c) => /name|navn|title/i.test(c.name || ''));
+      const matchId = (skuCol && skuCol.id)
+        || (field && field.lookup && findColumn(table, field.lookup.matchColumnId) && field.lookup.matchColumnId)
+        || (nameCol && nameCol.id)
+        || ((table.columns[0] && table.columns[0].id) || '');
+      const prev = (field && field.lookup) || {};
+      return {
+        fill: 'lookup',
+        lookup: {
+          tableId: table.id,
+          matchColumnId: matchId,
+          out: prev.out || 'link',
+          match: prev.match || 'equals',
+          also: prev.also || []
+        }
+      };
+    }
+
     function siblingOrderRecords(table, rec) {
       if (!table || !rec) return [];
       const refCol = (table.columns || []).find((c) => /customer\s*ref|kunde\s*ref|^po$|ordre/i.test(c.name || '') && !/delivery|packing|date/i.test(c.name || ''));
@@ -3382,7 +3426,13 @@
       const mode = (field && field.lookup && field.lookup.match) || 'contains';
       const matchCol = findColumn(table, field && field.lookup && field.lookup.matchColumnId);
       if (matchCol) {
-        return (table.records || []).find((r) => rowMatchesLookupCol(store, table, r, matchCol, needle, mode)) || null;
+        const hit = (table.records || []).find((r) => rowMatchesLookupCol(store, table, r, matchCol, needle, mode));
+        if (hit) return hit;
+        const nameLike = /name|navn|title|product/i.test(matchCol.name || '') && !/sku|item|cod|ean/i.test(matchCol.name || '');
+        if (isPackedProductTable(table) && /^\d{3,}$/.test(String(needle)) && nameLike) {
+          return (table.records || []).find((r) => skuLikeColumns(table).some((c) => rowMatchesLookupCol(store, table, r, c, needle, 'equals'))) || null;
+        }
+        return null;
       }
       return scanTableForNeedle(store, table, needle);
     }
@@ -3459,6 +3509,7 @@
     }
 
     function coerceRecipeCell(store, col, field, raw) {
+      if (isPackedProductCol(col)) field = preferredPackedLookup(store, col, field);
       if (field && field.fill === 'lookup' && field.lookup && field.lookup.tableId) {
         const hit = findRecipeLookupRow(store, field, raw);
         if (!hit) return '';
@@ -8056,10 +8107,10 @@
           };
           const hintTable = tableForColumnHint(this.store, mapCol);
           if (isLinkCol(mapCol) && mapCol.link) {
-            const lt = findTable(this.store, mapCol.link.tableId);
+            const lt = hintTable || findTable(this.store, mapCol.link.tableId);
             const skuCol = lt && /^\d+$/.test(sample) && skuLikeColumns(lt)[0];
             map.lookup = {
-              tableId: mapCol.link.tableId,
+              tableId: (hintTable && hintTable.id) || mapCol.link.tableId,
               matchColumnId: (skuCol && skuCol.id) || mapCol.link.searchColumnId || mapCol.link.matchColumnId || mapCol.link.displayColumnId,
               out: 'link',
               match: /^\d+$/.test(sample) ? 'equals' : 'contains',
@@ -8518,21 +8569,7 @@
                 const map = lineMaps.find((m) => m.columnId === packedCol.id)
                   || lineMaps.find((m) => skuLikeSample(m.sample))
                   || (recipe.maps || []).find((m) => m.columnId === packedCol.id);
-                let field = map;
-                if ((!field || field.fill !== 'lookup') && raw !== '' && raw != null) {
-                  const hint = tableForColumnHint(this.store, packedCol);
-                  const skuCol = hint && skuLikeColumns(hint)[0];
-                  field = {
-                    fill: 'lookup',
-                    lookup: {
-                      tableId: (hint && hint.id) || (packedCol.link && packedCol.link.tableId) || '',
-                      matchColumnId: (skuCol && skuCol.id) || (packedCol.link && (packedCol.link.searchColumnId || packedCol.link.matchColumnId)) || '',
-                      out: 'link',
-                      match: 'equals',
-                      also: []
-                    }
-                  };
-                }
+                const field = preferredPackedLookup(this.store, packedCol, map || { fill: 'pdf' });
                 const val = coerceRecipeCell(this.store, packedCol, field || { fill: 'pdf' }, raw);
                 if (this.recipeWriteCell(headerTable, target, packedCol, val)) filled += 1;
                 else if (raw !== '' && raw != null && !isLinkCol(packedCol) && this.recipeWriteCell(headerTable, target, packedCol, raw)) filled += 1;
@@ -9092,6 +9129,14 @@
           const destProd = { name: 'Product', type: 'link', link: { tableId: productsT.id, displayColumnId: prodNameCol.id, mode: 'pick' } };
           if (coerceRecipeCell(lkWs, destProd, packedRight, '888777') !== 'rec_packed_flow') console.warn('keep Packed Products hit when Product column still links to Products');
           if (displayForLink(lkWs, destProd, 'rec_packed_flow') !== '125g flowbag') console.warn('show Packed Product name even if the column is wired to Products');
+          const destPacked = { name: 'Packed Product', type: 'search', link: { tableId: productsT.id, displayColumnId: prodNameCol.id, searchScope: 'row', searchColumnId: prodNameCol.id } };
+          const taughtNameOnProducts = { fill: 'lookup', lookup: { tableId: productsT.id, matchColumnId: prodNameCol.id, match: 'equals', out: 'link' } };
+          const packedId = coerceRecipeCell(lkWs, destPacked, taughtNameOnProducts, '888777');
+          if (packedId !== 'rec_packed_flow') console.warn('Packed Product column must look up Packed Products by SKU, not Products by name', packedId);
+          if (displayForLink(lkWs, destPacked, packedId) !== '125g flowbag') console.warn('Packed Product cell must show the packed name, not a missing link');
+          const packNameCol = packed.columns.find((c) => c.name === 'Packed Product Name');
+          const nameOnPacked = { fill: 'lookup', lookup: { tableId: packed.id, matchColumnId: packNameCol.id, match: 'equals', out: 'link' } };
+          if (resolveRecipeFill(lkWs, nameOnPacked, '306832') !== 'rec_pack_1') console.warn('Packed Products Name match must still find the SKU on that sheet');
           packed.records[0].data = { 'Customer Product Code': '306832' };
           if (resolveRecipeFill(lkWs, packMap, '306832') !== 'rec_pack_1') console.warn('match Customer Product Code stored under the column name');
           packed.records[0].data = { col_pc: '306832\u200b' };
