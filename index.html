@@ -129,6 +129,14 @@
     .forge-sheet .jexcel > tbody > tr > td .sheet-attach { min-height: 32px; }
     .forge-sheet .jexcel_toolbar, .forge-sheet .jexcel_pagination, .forge-sheet .jexcel_filter { display: none !important; }
     .jexcel_contextmenu, .jcontextmenu { background: #10192c !important; border: 1px solid #2a3b5c !important; color: #d7e0f2 !important; }
+    .pdf-page { position: relative; background: #fff; }
+    .pdf-page canvas { display: block; width: 100%; height: auto; }
+    .pdf-hits { position: absolute; inset: 0; }
+    .pdf-hit { position: absolute; border: 1px solid transparent; background: transparent; padding: 0; }
+    .pdf-teach .pdf-hit { cursor: pointer; }
+    .pdf-teach .pdf-hit:hover { background: rgba(245, 185, 66, 0.35); outline: 1px solid #f5b942; }
+    .pdf-hit.mapped { outline: 1px solid #3ecfbe; background: rgba(62, 207, 190, 0.2); }
+    .pdf-hit.pick { cursor: pointer; }
   </style>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsuites@5.9.0/dist/jsuites.min.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jspreadsheet-ce@4.15.0/dist/jspreadsheet.min.css" />
@@ -196,7 +204,7 @@
     <div v-else class="h-full flex flex-col bg-ink-900">
       <!-- Header -->
       <header class="h-14 shrink-0 border-b border-line bg-ink-850 flex items-center gap-3 px-3 md:px-4">
-        <button class="rounded-md p-2 hover:bg-ink-700" @click="toggleWorkspacePanel" :title="workspacePanelOpen ? 'Hide workspace' : 'Show workspace'">
+        <button v-if="!panelMode" class="rounded-md p-2 hover:bg-ink-700" @click="toggleWorkspacePanel" :title="workspacePanelOpen ? 'Hide workspace' : 'Show workspace'">
           <icon name="panel" size="16"></icon>
         </button>
         <div class="flex items-center gap-2 min-w-0">
@@ -225,13 +233,14 @@
           <button class="sm:hidden rounded-lg border border-line px-2 py-1.5 text-xs" :class="mode==='architect' ? 'bg-gold text-ink-900' : 'bg-teal text-ink-900'" @click="mode==='architect' ? setMode('operator') : requestArchitect()">
             {{ mode==='architect' ? 'Architect' : 'Operator' }}
           </button>
-          <button class="rounded-lg border border-line px-2 py-1.5 text-xs hover:bg-ink-700 inline-flex items-center gap-1" :class="splitOpen && 'border-teal text-teal'" @click="toggleSplit" title="Split-screen document workspace">
+          <button v-if="!panelMode" class="rounded-lg border border-line px-2 py-1.5 text-xs hover:bg-ink-700 inline-flex items-center gap-1" :class="(splitOpen || undocked.docs) && 'border-teal text-teal'" @click="toggleSplit" title="Split-screen document workspace">
             <icon name="panel" size="14" /> <span class="hidden md:inline">Docs</span>
           </button>
-          <button class="rounded-lg border border-line px-2 py-1.5 text-xs hover:bg-ink-700 inline-flex items-center gap-1" :class="recipeOpen && 'border-gold text-gold'" @click="openRecipes" title="Client order recipes — map PDF fields to cells">
+          <button v-if="!panelMode" class="rounded-lg border border-line px-2 py-1.5 text-xs hover:bg-ink-700 inline-flex items-center gap-1" :class="(recipeOpen || undocked.recipes) && 'border-gold text-gold'" @click="openRecipes" title="Client order recipes — map PDF fields to cells">
             <span class="hidden md:inline">Recipes</span>
             <span class="md:hidden">Rx</span>
           </button>
+          <button v-if="panelMode" class="rounded-lg bg-gold text-ink-900 font-semibold px-2 py-1.5 text-xs" @click="closePanelWindow">Close this window</button>
           <button class="rounded-lg border border-line px-2 py-1.5 text-xs hover:bg-ink-700 inline-flex items-center gap-1" @click="exportExcel" title="Download Excel workbook">
             <icon name="download" size="14" /> <span class="hidden lg:inline">Excel</span>
           </button>
@@ -248,19 +257,44 @@
         </div>
       </header>
 
-      <div v-if="mode==='architect'" class="shrink-0 bg-gold text-ink-900 text-[12px] font-semibold px-4 py-1">
+      <div v-if="mode==='architect' && !recipeTeach.active" class="shrink-0 bg-gold text-ink-900 text-[12px] font-semibold px-4 py-1">
         Architect Mode is unlocked — categories, sheets, lookups, formulas, and client recipes can be changed. Switch back to Operator Mode before handing this screen to data-entry staff.
       </div>
-      <div class="flex-1 flex flex-col md:flex-row min-h-0 relative">
+      <div v-if="recipeTeach.active" class="shrink-0 bg-gold text-ink-900 px-3 py-2 text-[13px] flex flex-wrap items-center gap-2">
+        <span class="font-semibold">Teaching {{ (recipeDraft && recipeDraft.name) || 'recipe' }}</span>
+        <label class="inline-flex items-center gap-1 text-[12px]">Column
+          <select v-model="recipeTeach.colId" class="rounded-md bg-ink-900 text-mist px-2 py-1" @change="onTeachColChange">
+            <option value="">Pick a column…</option>
+            <option v-for="c in teachColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
+          </select>
+        </label>
+        <label class="inline-flex items-center gap-1 text-[12px]">
+          <input type="checkbox" v-model="recipeTeach.line" class="accent-ink-900" @change="onTeachLineToggle" />
+          Repeats on each line
+        </label>
+        <span class="opacity-80">{{ teachHintText }}</span>
+        <button v-if="!panelMode && !undocked.docs" class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="popOutPanel('docs')">Pop out PDF</button>
+        <button class="ml-auto rounded-md bg-ink-900 text-gold px-2 py-1 text-[12px] font-semibold" @click="saveRecipe">Save recipe</button>
+        <button class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="stopRecipeTeach">Done</button>
+      </div>
+      <div v-if="!panelMode && (undocked.docs || undocked.recipes)" class="shrink-0 bg-ink-800 border-b border-line text-[12px] px-3 py-1.5 flex flex-wrap items-center gap-2">
+        <span v-if="undocked.docs">The document panel is in another window — drag it onto a second monitor.</span>
+        <span v-if="undocked.recipes">The recipe editor is in another window.</span>
+        <button v-if="undocked.docs" class="rounded-md bg-ink-700 px-2 py-0.5" @click="focusPopout('docs')">Show PDF</button>
+        <button v-if="undocked.docs" class="rounded-md bg-ink-700 px-2 py-0.5" @click="dockPanel('docs')">Dock PDF here</button>
+        <button v-if="undocked.recipes" class="rounded-md bg-ink-700 px-2 py-0.5" @click="focusPopout('recipes')">Show recipes</button>
+        <button v-if="undocked.recipes" class="rounded-md bg-ink-700 px-2 py-0.5" @click="dockPanel('recipes')">Dock recipes here</button>
+      </div>
+      <div v-if="panelMode!=='recipes'" class="flex-1 flex flex-col md:flex-row min-h-0 relative">
         <!-- Sidebar overlay (mobile) -->
         <div v-if="sidebarOpen" class="md:hidden absolute inset-0 bg-black/50 z-20" @click="sidebarOpen=false"></div>
 
-        <button v-if="sidebarCollapsed" type="button" class="hidden md:flex w-9 shrink-0 border-r border-line bg-ink-850 items-center justify-center text-mute hover:text-white hover:bg-ink-700" title="Show workspace" @click="toggleWorkspacePanel">
+        <button v-if="!panelMode && sidebarCollapsed" type="button" class="hidden md:flex w-9 shrink-0 border-r border-line bg-ink-850 items-center justify-center text-mute hover:text-white hover:bg-ink-700" title="Show workspace" @click="toggleWorkspacePanel">
           <icon name="panel" size="16"></icon>
         </button>
 
         <!-- Sidebar -->
-        <aside class="w-72 shrink-0 border-r border-line bg-ink-850 flex flex-col absolute md:static inset-y-0 left-0 z-30 md:z-0 transition-transform" :class="workspacePanelOpen ? 'translate-x-0' : '-translate-x-full md:hidden'">
+        <aside v-if="!panelMode" class="w-72 shrink-0 border-r border-line bg-ink-850 flex flex-col absolute md:static inset-y-0 left-0 z-30 md:z-0 transition-transform" :class="workspacePanelOpen ? 'translate-x-0' : '-translate-x-full md:hidden'">
           <div class="px-3 py-3 flex items-center justify-between gap-2">
             <div>
               <div class="text-[11px] uppercase tracking-[0.16em] text-mute">Workspace</div>
@@ -342,7 +376,7 @@
         </aside>
 
         <!-- Split document pane -->
-        <section v-if="splitOpen" class="shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-line bg-ink-900 md:min-w-[240px]" :style="splitPaneStyle">
+        <section v-if="docsPaneVisible" class="shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-line bg-ink-900 md:min-w-[240px]" :class="panelMode==='docs' && 'flex-1 min-w-0 border-0'" :style="splitPaneStyle">
           <div class="h-10 shrink-0 border-b border-line flex items-center gap-2 px-2">
             <div class="text-xs font-medium truncate">Source document</div>
             <div class="ml-auto flex items-center gap-1">
@@ -351,8 +385,9 @@
                 <input type="file" class="hidden" multiple accept=".pdf,image/*,.txt,.edi,.x12,.csv,.json,text/plain" @change="onFileInput" />
               </label>
               <button v-if="activeDoc" class="text-[11px] rounded-md px-2 py-1 bg-ink-700 hover:brightness-110" title="Open full-size reader" @click="openDocReader">Read large</button>
-              <button v-if="activeDoc" class="p-1 text-mute hover:text-white" title="Open in a new window" @click="openDocPopout"><icon name="external" size="14"></icon></button>
-              <button class="p-1 text-mute hover:text-white" title="Close documents" @click="splitOpen=false"><icon name="x" size="14" /></button>
+              <button v-if="!panelMode" class="text-[11px] rounded-md px-2 py-1 bg-ink-700 hover:brightness-110" title="Move this panel to another window or monitor" @click="popOutPanel('docs')">Pop out</button>
+              <button v-if="activeDoc && panelMode!=='docs'" class="p-1 text-mute hover:text-white" title="Open in a new window" @click="openDocPopout"><icon name="external" size="14"></icon></button>
+              <button v-if="!panelMode" class="p-1 text-mute hover:text-white" title="Close documents" @click="splitOpen=false"><icon name="x" size="14" /></button>
             </div>
           </div>
           <div v-if="docs.length" class="flex gap-1 px-2 py-1 border-b border-line overflow-x-auto">
@@ -364,10 +399,22 @@
           <div class="flex-1 min-h-0 p-2" @dragover.prevent="docDrag=true" @dragleave="docDrag=false" @drop.prevent="onDrop">
             <div v-if="!activeDoc" class="h-full rounded-xl border-2 border-dashed doc-drop flex flex-col items-center justify-center text-center px-6" :class="docDrag && 'drag'">
               <div class="text-sm font-medium">Drop a PDF, screenshot, or EDI file</div>
-              <p class="text-xs text-mute mt-1 max-w-xs">Chrome will preview PDFs and images here. Text and EDI files open as monospace. You can also paste a screenshot with Ctrl+V. Files stay in this session only.</p>
+              <p class="text-xs text-mute mt-1 max-w-xs">Use Open file above, or drop a PDF here. To teach a recipe, open the PDF first, then Recipes → Teach on PDF, pick a column, and click the value on the page.</p>
             </div>
-            <div v-else class="h-full rounded-xl border border-line bg-ink-950 overflow-hidden relative">
-              <iframe v-if="activeDoc.kind==='pdf'" :key="pdfViewerSrc" :src="pdfViewerSrc" class="w-full h-full bg-white" title="PDF preview"></iframe>
+            <div v-else class="h-full rounded-xl border border-line bg-ink-950 overflow-hidden relative" :class="recipeTeach.active && 'pdf-teach'">
+              <div v-if="activeDoc.kind==='pdf'" class="h-full overflow-auto bg-white">
+                <div v-if="!pdfView.pages.length" class="h-full grid place-items-center text-ink-900 text-sm">Reading PDF…</div>
+                <div v-for="page in pdfView.pages" :key="page.num" class="pdf-page mx-auto">
+                  <canvas :id="'pdf-canvas-' + page.num" :width="page.width" :height="page.height"></canvas>
+                  <div class="pdf-hits">
+                    <button v-for="(it, i) in page.items" :key="i" type="button" class="pdf-hit"
+                      :class="pdfHitClass(page, it)"
+                      :style="pdfItemStyle(it)"
+                      :title="it.str"
+                      @click.stop="onPdfTextClick(page, it)"></button>
+                  </div>
+                </div>
+              </div>
               <div v-else-if="activeDoc.kind==='image'" class="h-full overflow-auto grid place-items-center bg-ink-950">
                 <img :src="activeDoc.url" :alt="activeDoc.name" class="max-w-full" :style="{ transform: 'scale(' + imgZoom + ')', transformOrigin: 'top center' }" />
               </div>
@@ -378,11 +425,6 @@
                   <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="imgZoom=Math.max(.4, imgZoom-.1)">−</button>
                   <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="imgZoom=1">Fit</button>
                   <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="imgZoom=Math.min(3, imgZoom+.1)">+</button>
-                </template>
-                <template v-else-if="activeDoc.kind==='pdf'">
-                  <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="nudgePdfZoom(-25)">−</button>
-                  <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="pdfZoom='page-width'">Page width</button>
-                  <button class="text-[11px] bg-ink-800/90 border border-line rounded px-2 py-1" @click="nudgePdfZoom(25)">+</button>
                 </template>
               </div>
             </div>
@@ -405,10 +447,10 @@
             <p v-if="recipeHint" class="text-mute leading-snug">{{ recipeHint }}</p>
           </div>
         </section>
-        <div v-if="splitOpen" class="split-resizer shrink-0 hidden md:block" :class="resizing && 'active'" @mousedown.prevent="startResize"></div>
+        <div v-if="docsPaneVisible && !panelMode" class="split-resizer shrink-0 hidden md:block" :class="resizing && 'active'" @mousedown.prevent="startResize"></div>
 
         <!-- Main table workspace -->
-        <main class="flex-1 min-w-0 flex flex-col bg-ink-900">
+        <main v-if="!panelMode" class="flex-1 min-w-0 flex flex-col bg-ink-900">
           <div v-if="currentGroup && currentGroup.kind==='dashboard' && !currentTable" class="flex-1 overflow-auto p-6 md:p-10">
             <div class="max-w-xl">
               <div class="text-[11px] uppercase tracking-[0.16em] text-mute">Dashboard idea</div>
@@ -889,12 +931,18 @@
       </modal-frame>
 
       <!-- Client recipes -->
-      <modal-frame v-if="recipeOpen" title="Client order recipes" wide @close="recipeOpen=false">
-        <p class="text-sm text-mute mb-3">Name the client, map PDF fields to columns, then choose what to put in the cell: the PDF text, a lookup/link on another sheet (same name or number), or a fixed value you type.</p>
+      <modal-frame v-if="recipeOpen && recipesPaneVisible" title="Client order recipes" wide :page="panelMode==='recipes'" @close="closeRecipesPane">
+        <p class="text-sm text-mute mb-3">Unlock Architect, open a PDF with <strong class="text-mist">Docs → Open file</strong>, then <strong class="text-mist">Teach on PDF</strong>: pick a column and click that value on the page. You can still type regex below if you prefer.
+          <button v-if="!panelMode" type="button" class="ml-2 text-teal" @click="popOutPanel('recipes')">Pop out to another window</button>
+        </p>
+        <div v-if="mode!=='architect'" class="mb-3 rounded-lg border border-gold/40 bg-gold/10 px-3 py-2 text-sm text-gold">
+          You are in Operator Mode, so recipes are read-only. Click <strong class="text-white">Architect</strong> in the top bar and enter your PIN to add, edit, or delete recipes.
+          <button type="button" class="ml-2 rounded-md bg-gold text-ink-900 font-semibold px-2 py-0.5 text-[12px]" @click="requestArchitect">Unlock Architect</button>
+        </div>
         <div class="grid md:grid-cols-[11rem_1fr] gap-3">
           <div class="space-y-1">
             <button v-for="r in store.recipes" :key="r.id" class="w-full text-left rounded-lg border px-2 py-1.5 text-sm truncate" :class="recipeDraft.id===r.id ? 'border-teal bg-ink-900' : 'border-line hover:bg-ink-800'" @click="editRecipe(r)">{{ r.name }}</button>
-            <button v-if="mode==='architect'" class="w-full text-left text-teal text-sm px-2 py-1" @click="newRecipe">+ New recipe</button>
+            <button class="w-full text-left text-teal text-sm px-2 py-1" @click="mode==='architect' ? newRecipe() : requestArchitect()">+ New recipe</button>
             <p v-if="!store.recipes.length" class="text-[11px] text-mute px-1">No recipes yet.</p>
           </div>
           <div v-if="recipeDraft.id" class="space-y-3">
@@ -931,12 +979,79 @@
                   <option value="">—</option>
                   <option v-for="c in recipeHeaderColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
                 </select>
+                <span class="block text-[11px] text-mute mt-1">Putting a PDF in that column on a row detects this recipe and fills the other cells.</span>
               </label>
             </div>
             <div>
+              <div class="text-sm font-medium mb-1">Clicked on the PDF</div>
+              <p class="text-[12px] text-mute mb-2">After a click, choose what to do with that value: keep the PDF text, look it up and <strong class="text-mist">link</strong> a row, copy another field from that row, or type a fixed value.</p>
+              <p v-if="!(recipeDraft.maps && recipeDraft.maps.length)" class="text-[12px] text-mute mb-2">Nothing clicked yet. Open a PDF with Docs, then Teach on PDF.</p>
+              <div v-for="(m, i) in (recipeDraft.maps || [])" :key="m.id" class="rounded-lg border border-line p-2 mb-2 space-y-2 text-sm">
+                <div class="flex flex-wrap items-center gap-2">
+                  <select v-model="m.columnId" class="flex-1 min-w-[8rem] rounded-md bg-ink-900 border border-line px-2 py-1" :disabled="mode!=='architect'">
+                    <option v-for="c in mapTargetColumns(m)" :key="c.id" :value="c.id">{{ c.name }}</option>
+                  </select>
+                  <span class="text-mute">←</span>
+                  <span class="font-mono text-[12px]">{{ m.sample }}</span>
+                  <span class="text-[11px] rounded px-1.5 py-0.5 bg-ink-900 text-mute">{{ m.role === 'line' ? 'each line' : 'once' }}</span>
+                  <button v-if="mode==='architect'" class="ml-auto text-[11px] text-red-300" @click="recipeDraft.maps.splice(i,1)">Remove</button>
+                </div>
+                <label class="block text-[11px] text-mute">Put in that cell
+                  <select v-model="m.fill" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-2 py-1 text-[12px] text-mist" :disabled="mode!=='architect'" @change="ensureRecipeLookup(m)">
+                    <option value="pdf">the PDF text as-is</option>
+                    <option value="lookup">lookup / link a matching row</option>
+                    <option value="fixed">a fixed value I type</option>
+                  </select>
+                </label>
+                <input v-if="m.fill==='fixed'" v-model.trim="m.fixed" class="w-full rounded-md bg-ink-900 border border-line px-2 py-1 text-sm" placeholder="e.g. Draft" :disabled="mode!=='architect'" />
+                <div v-if="m.fill==='lookup' && m.lookup" class="grid sm:grid-cols-2 gap-2">
+                  <label class="text-[11px] text-mute">Look in sheet
+                    <select v-model="m.lookup.tableId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
+                      <option value="">—</option>
+                      <option v-for="t in store.tables" :key="t.id" :value="t.id">{{ t.name }}</option>
+                    </select>
+                  </label>
+                  <label class="text-[11px] text-mute">Match this PDF value to
+                    <select v-model="m.lookup.matchColumnId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
+                      <option value="">—</option>
+                      <option v-for="c in lookupColumns(m.lookup.tableId)" :key="c.id" :value="c.id">{{ c.name }}</option>
+                    </select>
+                  </label>
+                  <label class="text-[11px] text-mute">How to match
+                    <select v-model="m.lookup.match" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
+                      <option value="contains">contains (REMA ≈ REMA Grønt)</option>
+                      <option value="equals">exact (306832 = 306832)</option>
+                    </select>
+                  </label>
+                  <label class="text-[11px] text-mute">Write into the mapped cell
+                    <select v-model="m.lookup.out" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
+                      <option value="link">link to that row</option>
+                      <option v-for="c in lookupColumns(m.lookup.tableId)" :key="c.id" :value="c.id">copy “{{ c.name }}”</option>
+                    </select>
+                  </label>
+                  <div class="sm:col-span-2 space-y-1">
+                    <div class="text-[11px] text-mute">Also fill other cells from that same match</div>
+                    <div v-for="(a, ai) in (m.lookup.also || [])" :key="ai" class="flex flex-wrap gap-1 items-center">
+                      <select v-model="a.columnId" class="flex-1 min-w-[7rem] rounded-md bg-ink-900 border border-line px-1 py-1 text-[12px]" :disabled="mode!=='architect'">
+                        <option value="">This sheet column…</option>
+                        <option v-for="c in mapTargetColumns(m)" :key="c.id" :value="c.id">{{ c.name }}</option>
+                      </select>
+                      <span class="text-mute text-[11px]">←</span>
+                      <select v-model="a.out" class="flex-1 min-w-[7rem] rounded-md bg-ink-900 border border-line px-1 py-1 text-[12px]" :disabled="mode!=='architect'">
+                        <option value="link">the linked row</option>
+                        <option v-for="c in lookupColumns(m.lookup.tableId)" :key="c.id" :value="c.id">copy {{ c.name }}</option>
+                      </select>
+                      <button v-if="mode==='architect'" type="button" class="text-[11px] text-red-300" @click="m.lookup.also.splice(ai,1)">Remove</button>
+                    </div>
+                    <button v-if="mode==='architect'" type="button" class="text-[12px] text-teal" @click="addMapAlso(m)">+ Also fill another column</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div>
               <div class="flex items-center justify-between mb-1">
-                <div class="text-sm font-medium">Header fields → cells</div>
-                <button v-if="mode==='architect'" class="text-[12px] text-teal" @click="addRecipeHeaderField">+ Field</button>
+                <div class="text-sm font-medium">Or type a regex (optional)</div>
+                <button class="text-[12px] text-teal" @click="mode==='architect' ? addRecipeHeaderField() : requestArchitect()">+ Field</button>
               </div>
               <div class="space-y-2">
                 <div v-for="(f, i) in recipeDraft.headerFields" :key="f.id" class="rounded-lg border border-line p-2 grid sm:grid-cols-2 gap-2">
@@ -1003,7 +1118,7 @@
             <div v-if="recipeDraft.lineTableId">
               <div class="flex items-center justify-between mb-1">
                 <div class="text-sm font-medium">Line groups → columns</div>
-                <button v-if="mode==='architect'" class="text-[12px] text-teal" @click="addRecipeLineField">+ Group map</button>
+                <button class="text-[12px] text-teal" @click="mode==='architect' ? addRecipeLineField() : requestArchitect()">+ Group map</button>
               </div>
               <div v-for="(f, i) in recipeDraft.lineFields" :key="i" class="rounded-lg border border-line p-2 mb-1 space-y-1">
                 <div class="flex flex-wrap gap-2 items-center">
@@ -1051,11 +1166,12 @@
               <pre class="text-[11px] font-mono whitespace-pre-wrap max-h-40 overflow-auto">{{ recipePreview }}</pre>
             </div>
             <div class="flex flex-wrap gap-2 justify-between">
-              <button v-if="mode==='architect' && recipeDraft.id" class="text-sm text-red-300" @click="deleteRecipe">Delete recipe</button>
+              <button v-if="recipeDraft.id" class="text-sm text-red-300" @click="mode==='architect' ? deleteRecipe() : requestArchitect()">Delete recipe</button>
               <span v-else></span>
               <div class="flex gap-2">
                 <button class="text-sm rounded-lg border border-line px-3 py-1.5" @click="testRecipeOnDoc" :disabled="!activeDoc">Test on open PDF</button>
-                <button v-if="mode==='architect'" class="text-sm rounded-lg bg-gold text-ink-900 font-semibold px-3 py-1.5" @click="saveRecipe">Save recipe</button>
+                <button class="text-sm rounded-lg bg-teal text-ink-900 font-semibold px-3 py-1.5" @click="mode==='architect' ? startRecipeTeach() : requestArchitect()">Teach on PDF</button>
+                <button class="text-sm rounded-lg bg-gold text-ink-900 font-semibold px-3 py-1.5" @click="mode==='architect' ? saveRecipe() : requestArchitect()">Save recipe</button>
               </div>
             </div>
           </div>
@@ -1158,9 +1274,9 @@
               <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line" @click="imgZoom=1">Fit</button>
               <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line" @click="imgZoom=Math.min(4, imgZoom+.15)">+</button>
             </template>
-            <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line inline-flex items-center gap-1" @click="openDocPopout">
+            <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line inline-flex items-center gap-1" @click="popOutPanel('docs'); closeDocReader()">
               <icon name="external" size="12"></icon>
-              <span>New window</span>
+              <span>Pop out</span>
             </button>
             <button class="text-[11px] rounded-md px-2 py-1 bg-gold text-ink-900 font-semibold" @click="closeDocReader">Close</button>
           </div>
@@ -1213,6 +1329,8 @@
   <script>
   (function () {
     const STORAGE_KEY = 'forgegrid.workspace.v1';
+    const UNDOCK_CH = 'forgegrid.panels.v1';
+    const UNDOCK_SESSION = 'forgegrid.undocked.v1';
     const { createApp } = window.Vue || {};
 
     const COLUMN_TYPES = [
@@ -1495,6 +1613,7 @@
       store.recipes.forEach((r) => {
         if (!Array.isArray(r.headerFields)) r.headerFields = [];
         if (!Array.isArray(r.lineFields)) r.lineFields = [];
+        if (!Array.isArray(r.maps)) r.maps = [];
         if (r.detect == null) r.detect = '';
       });
       return store;
@@ -2485,7 +2604,7 @@
     }
 
     function emptyRecipeLookup() {
-      return { tableId: '', matchColumnId: '', out: 'link', match: 'contains' };
+      return { tableId: '', matchColumnId: '', out: 'link', match: 'contains', also: [] };
     }
 
     function recipeTextMatch(a, b, mode) {
@@ -2501,28 +2620,284 @@
       return tx.some((t) => ty.indexOf(t) >= 0);
     }
 
+    function valuesEqualNeedle(needle, shown, stored) {
+      const n = String(needle == null ? '' : needle).trim();
+      const a = String(shown == null ? '' : shown).trim();
+      const b = stored == null ? '' : String(stored).trim();
+      if (!n) return false;
+      if (a.toLowerCase() === n.toLowerCase() || b.toLowerCase() === n.toLowerCase()) return true;
+      if (/^\d+(\.0+)?$/.test(n)) {
+        const num = Number(n);
+        if (Number.isFinite(num) && (Number(stored) === num || Number(shown) === num)) return true;
+      }
+      return false;
+    }
+
+    function scanTableForNeedle(store, table, needle) {
+      const n = String(needle == null ? '' : needle).trim();
+      if (!n || !table) return null;
+      const exact = [];
+      (table.records || []).forEach((r) => {
+        (table.columns || []).forEach((c) => {
+          if (valuesEqualNeedle(n, formatDisplay(store, table, r, c), rawStored(r, c))) {
+            if (exact.indexOf(r) < 0) exact.push(r);
+          }
+        });
+      });
+      if (exact.length === 1) return exact[0];
+      if (exact.length > 1) return null;
+      const fuzzy = (table.records || []).filter((r) => (table.columns || []).some((c) => (
+        recipeTextMatch(n, formatDisplay(store, table, r, c), 'contains') || recipeTextMatch(n, rawStored(r, c), 'contains')
+      )));
+      return fuzzy.length === 1 ? fuzzy[0] : null;
+    }
+
+    function tableForColumnHint(store, col) {
+      if (!col) return null;
+      if (isLinkCol(col)) return findTable(store, col.link && col.link.tableId);
+      const n = String(col.name || '').toLowerCase();
+      const tables = store.tables || [];
+      if (/product|sku|item|vare/.test(n) && !/qty|qty|antal/.test(n)) return tables.find((t) => /product|vare/i.test(t.name)) || null;
+      if (/customer|kunde|client/.test(n) && !/ref|po|ordre|order/.test(n)) return tables.find((t) => /customer|kunde/i.test(t.name)) || null;
+      return null;
+    }
+
+    function displayNameOfRecord(store, table, rec) {
+      const nameCol = (table.columns || []).find((c) => /^(name|navn|title|product)$/i.test(c.name)) || (table.columns || []).find((c) => /name|navn/i.test(c.name));
+      const col = nameCol || table.columns[0];
+      return col ? formatDisplay(store, table, rec, col) : '';
+    }
+
+    function findRecipeLookupRow(store, field, raw) {
+      if (!field || (field.fill && field.fill !== 'lookup') || !field.lookup || !field.lookup.tableId) return null;
+      const table = findTable(store, field.lookup.tableId);
+      if (!table) return null;
+      const needle = String(raw == null ? '' : raw).trim();
+      const matchCol = findColumn(table, field.lookup.matchColumnId);
+      const mode = field.lookup.match || 'contains';
+      if (matchCol) {
+        const hit = table.records.find((r) => {
+          const shown = formatDisplay(store, table, r, matchCol);
+          const stored = rawStored(r, matchCol);
+          return recipeTextMatch(needle, shown, mode) || recipeTextMatch(needle, stored, mode) || valuesEqualNeedle(needle, shown, stored);
+        });
+        if (hit) return hit;
+      }
+      return scanTableForNeedle(store, table, needle);
+    }
+
     function resolveRecipeFill(store, field, raw) {
       if (!field) return raw;
       const fill = field.fill || 'pdf';
       if (fill === 'fixed') return field.fixed != null && field.fixed !== '' ? field.fixed : '';
       if (fill !== 'lookup' || !field.lookup || !field.lookup.tableId) return raw;
       const table = findTable(store, field.lookup.tableId);
-      if (!table) return '';
-      const matchCol = findColumn(table, field.lookup.matchColumnId);
-      if (!matchCol) return '';
-      const needle = String(raw == null ? '' : raw).trim();
-      const mode = field.lookup.match || 'contains';
-      const hit = table.records.find((r) => {
-        const shown = formatDisplay(store, table, r, matchCol);
-        const stored = rawStored(r, matchCol);
-        return recipeTextMatch(needle, shown, mode) || recipeTextMatch(needle, stored, mode);
-      });
+      const hit = findRecipeLookupRow(store, field, raw);
       if (!hit) return '';
       const out = field.lookup.out;
       if (!out || out === 'link') return hit.id;
       const outCol = findColumn(table, out);
       if (!outCol) return hit.id;
       return rawStored(hit, outCol);
+    }
+
+    function lookupAlsoValue(store, field, also, hit) {
+      if (!hit || !also) return '';
+      if (!also.out || also.out === 'link') return hit.id;
+      const table = findTable(store, field.lookup && field.lookup.tableId);
+      const outCol = findColumn(table, also.out);
+      return outCol ? rawStored(hit, outCol) : '';
+    }
+
+    function matchLinkedRecord(store, col, raw) {
+      if (!isLinkCol(col)) return raw;
+      const needle = String(raw == null ? '' : raw).trim();
+      if (!needle) return '';
+      const lt = findTable(store, col.link && col.link.tableId);
+      if (!lt) return '';
+      if (lt.records.some((r) => r.id === needle)) return needle;
+      const scanned = scanTableForNeedle(store, lt, needle);
+      if (scanned) return scanned.id;
+      const dc = findColumn(lt, col.link.displayColumnId) || lt.columns[0];
+      const exact = dc && lt.records.find((r) => String(formatDisplay(store, lt, r, dc)).toLowerCase() === needle.toLowerCase());
+      if (exact) return exact.id;
+      const scope = col.link.searchScope || (col.type === 'search' ? 'row' : 'column');
+      const matchCol = findColumn(lt, col.link.searchColumnId || col.link.matchColumnId || col.link.displayColumnId) || dc;
+      const hits = lt.records.filter((r) => {
+        if (scope === 'row') {
+          return lt.columns.some((c) => recipeTextMatch(needle, formatDisplay(store, lt, r, c), 'contains') || recipeTextMatch(needle, rawStored(r, c), 'contains'));
+        }
+        if (!matchCol) return false;
+        return recipeTextMatch(needle, formatDisplay(store, lt, r, matchCol), 'contains') || recipeTextMatch(needle, rawStored(r, matchCol), 'contains');
+      });
+      if (hits.length === 1) return hits[0].id;
+      const starts = dc ? hits.filter((r) => String(formatDisplay(store, lt, r, dc)).toLowerCase().indexOf(needle.toLowerCase()) === 0) : [];
+      if (starts.length === 1) return starts[0].id;
+      return '';
+    }
+
+    function coerceRecipeCell(store, col, field, raw) {
+      let val = resolveRecipeFill(store, field, raw);
+      if (col && isLinkCol(col)) {
+        val = matchLinkedRecord(store, col, val);
+        return val;
+      }
+      const fill = (field && field.fill) || 'pdf';
+      if (fill === 'pdf' && col && val !== '' && val != null) {
+        const t = tableForColumnHint(store, col);
+        const hit = t && scanTableForNeedle(store, t, val);
+        if (hit) {
+          if (/sku|item\s*no|varenr|ean|code/i.test(col.name || '')) return val;
+          const name = displayNameOfRecord(store, t, hit);
+          if (name) return name;
+        }
+      }
+      return val;
+    }
+
+    function guessTransform(s) {
+      const t = String(s || '').trim();
+      if (/^\d{1,2}[-./]\d{1,2}[-./]\d{2,4}$/.test(t)) return 'date-dk';
+      if (/^\d{1,3}(\.\d{3})*,\d{2}$/.test(t) || /^\d+,\d{2}$/.test(t)) return 'number-dk';
+      if (/^\d+$/.test(t)) return 'number';
+      return 'text';
+    }
+
+    function pdfItemRect(item, viewport) {
+      const x = item.transform[4];
+      const y = item.transform[5];
+      const w = item.width || 0;
+      const h = item.height || Math.abs(item.transform[3]) || Math.abs(item.transform[0]) || 8;
+      const a = viewport.convertToViewportPoint(x, y);
+      const b = viewport.convertToViewportPoint(x + w, y + h);
+      const left = Math.min(a[0], b[0]);
+      const top = Math.min(a[1], b[1]);
+      return { x: left, y: top, w: Math.max(Math.abs(b[0] - a[0]), 3), h: Math.max(Math.abs(b[1] - a[1]), 6) };
+    }
+
+    function explodePdfWords(items) {
+      const out = [];
+      items.forEach((it) => {
+        const raw = String(it.str || '');
+        const parts = raw.split(/(\s+)/);
+        const words = parts.filter((p) => p && !/^\s+$/.test(p));
+        if (words.length <= 1) {
+          if (raw.trim()) out.push(it);
+          return;
+        }
+        let acc = 0;
+        const total = raw.length || 1;
+        parts.forEach((p) => {
+          if (!p) return;
+          const frac = p.length / total;
+          if (p.trim()) {
+            out.push({
+              str: p.trim(),
+              nx: it.nx + acc * it.nw,
+              ny: it.ny,
+              nw: Math.max(frac * it.nw, 0.004),
+              nh: it.nh
+            });
+          }
+          acc += frac;
+        });
+      });
+      out.sort((a, b) => (b.nw * b.nh) - (a.nw * a.nh));
+      return out;
+    }
+
+    function leftLabelFor(items, hit) {
+      const cy = hit.ny + hit.nh / 2;
+      const left = items.filter((it) => {
+        if (it === hit) return false;
+        const icy = it.ny + it.nh / 2;
+        return Math.abs(icy - cy) < 0.015 && (it.nx + it.nw) <= hit.nx + 0.004 && String(it.str).trim().length > 1;
+      }).sort((a, b) => (b.nx + b.nw) - (a.nx + a.nw));
+      return left[0] ? String(left[0].str).replace(/\s+/g, ' ').trim() : '';
+    }
+
+    function nearestPdfItem(items, nx, ny, maxX, maxY) {
+      let best = null;
+      let bestD = 99;
+      items.forEach((it) => {
+        const cx = it.nx + it.nw / 2;
+        const cy = it.ny + it.nh / 2;
+        const dx = Math.abs(cx - nx);
+        const dy = Math.abs(cy - ny);
+        if (dx > maxX || dy > maxY) return;
+        const d = dx * 1.2 + dy;
+        if (d < bestD) { bestD = d; best = it; }
+      });
+      return best;
+    }
+
+    function readClickMap(pages, map) {
+      const page = pages[(map.page || 1) - 1];
+      if (!page) return '';
+      const items = page.items || [];
+      const sample = String(map.sample || '').trim();
+      if (sample) {
+        const same = items.filter((it) => String(it.str || '').replace(/\s+/g, ' ').trim() === sample);
+        if (same.length === 1) return sample;
+        if (same.length > 1) {
+          const hit = nearestPdfItem(same, map.nx + map.nw / 2, map.ny + map.nh / 2, 1, 1);
+          if (hit) return String(hit.str).trim();
+        }
+      }
+      const label = String(map.label || '').trim();
+      if (label) {
+        const labs = items.filter((it) => String(it.str).replace(/\s+/g, ' ').trim().toLowerCase() === label.toLowerCase());
+        labs.sort((a, b) => Math.abs((a.ny + a.nh / 2) - (map.ny + map.nh / 2)) - Math.abs((b.ny + b.nh / 2) - (map.ny + map.nh / 2)));
+        const L = labs[0];
+        if (L) {
+          const cy = L.ny + L.nh / 2;
+          const right = items.filter((it) => it !== L && String(it.str).trim() && Math.abs((it.ny + it.nh / 2) - cy) < 0.015 && it.nx >= L.nx + L.nw - 0.01)
+            .sort((a, b) => a.nx - b.nx);
+          if (right[0]) return String(right[0].str).trim();
+        }
+      }
+      const hit = nearestPdfItem(items, map.nx + map.nw / 2, map.ny + map.nh / 2, 0.08, 0.04);
+      return hit ? String(hit.str).trim() : '';
+    }
+
+    function extractFromMaps(pages, recipe) {
+      const maps = recipe.maps || [];
+      const header = {};
+      maps.filter((m) => m.role !== 'line').forEach((m) => {
+        header[m.columnId] = transformRecipeValue(readClickMap(pages, m), m.transform);
+      });
+      const lineMaps = maps.filter((m) => m.role === 'line');
+      const lines = [];
+      if (lineMaps.length) {
+        const page = pages[(lineMaps[0].page || 1) - 1];
+        const items = (page && page.items) || [];
+        const m0 = lineMaps[0];
+        const cx0 = m0.nx + m0.nw / 2;
+        const hits = items.filter((it) => Math.abs((it.nx + it.nw / 2) - cx0) < 0.04 && String(it.str).trim());
+        const clusters = [];
+        hits.map((it) => it.ny + it.nh / 2).sort((a, b) => a - b).forEach((y) => {
+          const last = clusters[clusters.length - 1];
+          if (last && Math.abs(last.y - y) < 0.01) {
+            last.y = (last.y * last.n + y) / (last.n + 1);
+            last.n += 1;
+          } else clusters.push({ y, n: 1 });
+        });
+        clusters.forEach((c) => {
+          const row = {};
+          let filled = 0;
+          lineMaps.forEach((m) => {
+            const it = nearestPdfItem(items, m.nx + m.nw / 2, c.y, 0.045, 0.012);
+            if (!it) return;
+            const val = transformRecipeValue(it.str, m.transform);
+            if (val === '' || val == null) return;
+            if ((m.transform === 'number' || m.transform === 'number-dk') && typeof val !== 'number') return;
+            row[m.columnId] = val;
+            filled += 1;
+          });
+          if (filled) lines.push(row);
+        });
+      }
+      return { header, lines };
     }
 
     function runRecipeExtract(text, recipe) {
@@ -2691,16 +3066,16 @@
     };
 
     const ModalFrame = {
-      props: { title: String, wide: Boolean },
+      props: { title: String, wide: Boolean, page: Boolean },
       emits: ['close'],
       template: `
-        <div class="fixed inset-0 z-[70] flex items-start justify-center p-4 md:p-8 bg-black/55" @click.self="$emit('close')">
-          <div class="w-full rounded-2xl border border-line bg-ink-850 shadow-panel" :class="wide ? 'max-w-3xl' : 'max-w-lg'" @click.stop>
-            <div class="px-4 py-3 border-b border-line flex items-center justify-between">
+        <div :class="page ? 'flex-1 min-h-0 flex flex-col bg-ink-900' : 'fixed inset-0 z-[70] flex items-start justify-center p-4 md:p-8 bg-black/55'" @click.self="page ? undefined : $emit('close')">
+          <div class="w-full border border-line bg-ink-850 shadow-panel flex flex-col min-h-0" :class="page ? 'flex-1 rounded-none border-0 shadow-none' : (wide ? 'max-w-3xl rounded-2xl' : 'max-w-lg rounded-2xl')" @click.stop>
+            <div class="px-4 py-3 border-b border-line flex items-center justify-between shrink-0">
               <h3 class="font-semibold">{{ title }}</h3>
               <button class="text-mute hover:text-white" @click="$emit('close')"><icon name="x" /></button>
             </div>
-            <div class="p-4 max-h-[min(72vh,560px)] overflow-y-auto"><slot /></div>
+            <div class="p-4 overflow-y-auto" :class="page ? 'flex-1 min-h-0' : 'max-h-[min(72vh,560px)]'"><slot /></div>
           </div>
         </div>`
     };
@@ -3168,6 +3543,12 @@
           view: 'grid',
           sidebarOpen: false,
           sidebarCollapsed: false,
+          panelMode: (function () {
+            try { return new URLSearchParams(location.search).get('panel') || ''; } catch (e) { return ''; }
+          })(),
+          winId: uid('win'),
+          undocked: { docs: false, recipes: false },
+          popouts: { docs: null, recipes: null },
           splitOpen: false,
           splitWidth: 42,
           resizing: false,
@@ -3213,7 +3594,9 @@
           selectedRecipeId: '',
           recipeBusy: false,
           recipeHint: '',
-          recipePreview: ''
+          recipePreview: '',
+          recipeTeach: { active: false, colId: '', line: false },
+          pdfView: { pages: [], src: '' }
         };
       },
       computed: {
@@ -3486,6 +3869,14 @@
           const t = findTable(this.store, this.recipeDraft.lineTableId);
           return t ? t.columns : [];
         },
+        teachColumns() {
+          if (this.recipeTeach.line) {
+            const t = findTable(this.store, this.recipeDraft.lineTableId) || this.currentTable;
+            return t ? t.columns : [];
+          }
+          const t = findTable(this.store, this.recipeDraft.headerTableId) || this.currentTable;
+          return t ? t.columns : [];
+        },
         readerDoc() { return this.attachPreview || this.activeDoc; },
         pdfViewerSrc() {
           const d = this.readerDoc;
@@ -3494,8 +3885,27 @@
           return d.url + '#toolbar=1&navpanes=0&scrollbar=1&view=FitH&zoom=' + encodeURIComponent(z);
         },
         splitPaneStyle() {
+          if (this.panelMode === 'docs') return { width: '100%', flex: '1 1 auto', height: '100%' };
           if (this.windowWidth < 768) return { width: '100%', height: '42vh' };
           return { width: this.splitWidth + '%' };
+        },
+        docsPaneVisible() {
+          if (this.panelMode === 'docs') return true;
+          if (this.panelMode) return false;
+          return this.splitOpen && !this.undocked.docs;
+        },
+        recipesPaneVisible() {
+          if (this.panelMode === 'recipes') return true;
+          if (this.panelMode) return false;
+          return !this.undocked.recipes;
+        },
+        teachHintText() {
+          if (this.recipeTeach.colId) {
+            return this.undocked.docs || this.panelMode === 'docs'
+              ? 'Now click that value on the PDF window.'
+              : 'Now click that value on the PDF at the left.';
+          }
+          return 'Open the PDF (Docs → Open file or Pop out), pick a column, then click the value.';
         }
       },
       watch: {
@@ -3504,7 +3914,20 @@
           handler() { this.schedulePersist(); }
         },
         sheetBindKey() {
+          if (this.panelMode) return;
           this.$nextTick(() => this.bindSheet());
+        },
+        activeDoc(doc) {
+          if (doc && doc.kind === 'pdf' && doc.url) this.loadPdfView(doc);
+          else this.pdfView = { pages: [], src: '' };
+          this.sendUndockPdf();
+        },
+        recipeTeach: {
+          deep: true,
+          handler(v) {
+            if (this._remoteTeach) return;
+            this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, line: v.line } });
+          }
         }
       },
       methods: {
@@ -3566,6 +3989,7 @@
           this.paintAttachCells();
         },
         bindSheet() {
+          if (this.panelMode) return;
           const el = this.$refs.sheetHost;
           const jss = window.jspreadsheet;
           if (!el || this.view !== 'grid' || !this.currentTable || !this.visibleColumns.length) {
@@ -3959,7 +4383,7 @@
           if (this.store.audit.length > 1200) this.store.audit.splice(0, this.store.audit.length - 1000);
         },
         schedulePersist() {
-          if (!this.persistEnabled) return;
+          if (!this.persistEnabled || this._applyingStorage) return;
           clearTimeout(this._persistTimer);
           this._persistTimer = setTimeout(() => this.persist(), 200);
         },
@@ -4999,6 +5423,12 @@
           if (this._didResize) { this._didResize = false; return; }
           const t = e.target;
           if (t && t.closest && (t.closest('.col-resizer') || t.closest('button') || t.closest('.col-move'))) return;
+          if (this.recipeTeach.active && col) {
+            e.preventDefault();
+            this.recipeTeach.colId = col.id;
+            this.onTeachColChange();
+            return;
+          }
           if (this.fxBar.open && this.mode === 'architect') {
             e.preventDefault();
             this.insertFxBarRef(null, col);
@@ -5147,6 +5577,9 @@
           }
           if (payload.record && payload.record.fx) delete payload.record.fx[payload.column.id];
           this.setCell(payload.record, payload.column, v);
+          if (payload.column && payload.column.type === 'attachment' && isAttachMeta(v) && payload.record) {
+            this.$nextTick(() => this.fillRowFromAttach(payload.record, payload.column));
+          }
         },
         applyCellRule(rec, col, spec, dR, dC, quiet) {
           if (!rec || !col || rec.locked) return false;
@@ -5819,7 +6252,191 @@
           if (e.shiftKey) this.applySelection(this.selectionAnchor.recId ? this.selectionAnchor : { recId: rows[rI].id, colId: cols[cI].id }, next);
           else this.applySelection(next, next);
         },
-        toggleSplit() { this.splitOpen = !this.splitOpen; if (this.splitOpen) this.view = 'form'; },
+        toggleSplit() {
+          if (this.undocked.docs) return this.focusPopout('docs');
+          this.splitOpen = !this.splitOpen;
+          if (this.splitOpen) this.view = 'form';
+        },
+        undockPost(msg) {
+          try {
+            if (this._undockCh) this._undockCh.postMessage(Object.assign({ from: this.winId }, msg));
+          } catch (e) {}
+        },
+        rememberUndock() {
+          try { sessionStorage.setItem(UNDOCK_SESSION, JSON.stringify(this.undocked)); } catch (e) {}
+        },
+        popOutPanel(name) {
+          const u = new URL(location.href);
+          u.searchParams.set('panel', name);
+          const feat = name === 'docs'
+            ? 'popup=yes,width=980,height=1200,left=60,top=30'
+            : 'popup=yes,width=920,height=1000,left=100,top=50';
+          const w = window.open(u.toString(), 'forgegrid-' + name, feat);
+          if (!w) return this.toast('Allow pop-ups so the panel can open on another monitor.', 'warn');
+          this.popouts[name] = w;
+          this.undocked[name] = true;
+          this.rememberUndock();
+          if (name === 'docs') {
+            this.splitOpen = false;
+            this.docReaderOpen = false;
+          }
+          if (name === 'recipes') this.recipeOpen = false;
+          this.toast('Drag that window onto another monitor. Clicks on the PDF still map here.');
+          setTimeout(() => this.sendUndockPdf(), 400);
+        },
+        dockPanel(name) {
+          this.undocked[name] = false;
+          this.rememberUndock();
+          const w = this.popouts[name];
+          if (w && !w.closed) {
+            try { w.close(); } catch (e) {}
+          }
+          this.popouts[name] = null;
+          if (name === 'docs') this.splitOpen = true;
+          if (name === 'recipes') this.openRecipes();
+        },
+        focusPopout(name) {
+          const w = this.popouts[name];
+          if (w && !w.closed) {
+            try { w.focus(); } catch (e) {}
+          } else {
+            this.popOutPanel(name);
+          }
+        },
+        closePanelWindow() {
+          this.undockPost({ type: 'dock', panel: this.panelMode });
+          window.close();
+        },
+        closeRecipesPane() {
+          if (this.panelMode === 'recipes') return this.closePanelWindow();
+          this.recipeOpen = false;
+        },
+        async sendUndockPdf() {
+          if (this.panelMode) return;
+          if (!this.undocked.docs) return;
+          const d = this.activeDoc;
+          if (!d) {
+            this.undockPost({ type: 'pdf-clear' });
+            return;
+          }
+          try {
+            let buffer = null;
+            if (d.file) buffer = await d.file.arrayBuffer();
+            else if (d.url) {
+              const res = await fetch(d.url);
+              buffer = await res.arrayBuffer();
+            }
+            this.undockPost({
+              type: 'pdf',
+              name: d.name,
+              kind: d.kind,
+              mime: d.type || (d.kind === 'pdf' ? 'application/pdf' : ''),
+              text: d.text || '',
+              size: d.size || (buffer && buffer.byteLength) || 0,
+              buffer
+            });
+          } catch (e) {
+            this.toast('Could not send the document to the other window.', 'warn');
+          }
+        },
+        async applyUndockPdf(msg) {
+          if (this.panelMode !== 'docs') return;
+          if (this._popPdfUrl) {
+            try { URL.revokeObjectURL(this._popPdfUrl); } catch (e) {}
+            this._popPdfUrl = '';
+          }
+          if (!msg.buffer) return;
+          const blob = new Blob([msg.buffer], { type: msg.mime || 'application/pdf' });
+          const url = URL.createObjectURL(blob);
+          this._popPdfUrl = url;
+          const doc = {
+            id: 'popout-doc',
+            name: msg.name || 'Document',
+            size: msg.size || blob.size,
+            type: msg.mime || '',
+            kind: msg.kind || 'pdf',
+            url,
+            text: msg.text || '',
+            file: blob
+          };
+          this.docs = [doc];
+          this.activeDocId = doc.id;
+          this.splitOpen = true;
+        },
+        onUndockMsg(msg) {
+          if (!msg || msg.from === this.winId) return;
+          if (msg.type === 'hello' && msg.panel === 'docs') this.sendUndockPdf();
+          if (msg.type === 'pdf' && this.panelMode === 'docs') this.applyUndockPdf(msg);
+          if (msg.type === 'pdf-clear' && this.panelMode === 'docs') {
+            this.docs = [];
+            this.activeDocId = null;
+            this.pdfView = { pages: [], src: '' };
+          }
+          if (msg.type === 'teach' && msg.teach) {
+            this._remoteTeach = true;
+            this.recipeTeach = { active: !!msg.teach.active, colId: msg.teach.colId || '', line: !!msg.teach.line };
+            this.$nextTick(() => { this._remoteTeach = false; });
+          }
+          if (msg.type === 'pdf-hit') this.applyPdfHit(msg);
+          if (msg.type === 'dock' && msg.panel) {
+            this.undocked[msg.panel] = false;
+            this.rememberUndock();
+            if (msg.panel === 'docs') this.splitOpen = true;
+            if (msg.panel === 'recipes') this.openRecipes();
+          }
+        },
+        applyPdfHit(msg) {
+          if (this.panelMode === 'docs') return;
+          if (this.undocked.recipes && this.panelMode !== 'recipes') return;
+          const it = msg.item;
+          const page = { num: msg.pageNum, items: msg.items || [] };
+          if (!it) return;
+          this.onPdfTextClick(page, it, { fromPopout: true, label: msg.label });
+        },
+        initUndock() {
+          try {
+            const raw = sessionStorage.getItem(UNDOCK_SESSION);
+            if (raw && !this.panelMode) this.undocked = Object.assign({ docs: false, recipes: false }, JSON.parse(raw));
+          } catch (e) {}
+          try {
+            this._undockCh = new BroadcastChannel(UNDOCK_CH);
+            this._undockCh.onmessage = (ev) => this.onUndockMsg(ev.data);
+          } catch (e) { this._undockCh = null; }
+          if (this.panelMode === 'docs') {
+            this.splitOpen = true;
+            this.undockPost({ type: 'hello', panel: 'docs' });
+          }
+          if (this.panelMode === 'recipes') this.openRecipes();
+          this._popWatch = setInterval(() => {
+            ['docs', 'recipes'].forEach((name) => {
+              const w = this.popouts[name];
+              if (this.undocked[name] && w && w.closed) {
+                this.undocked[name] = false;
+                this.popouts[name] = null;
+                this.rememberUndock();
+                if (name === 'docs') this.splitOpen = true;
+              }
+            });
+          }, 900);
+        },
+        onWorkspaceStorage(e) {
+          if (!e || e.key !== STORAGE_KEY || !e.newValue) return;
+          if (this._applyingStorage) return;
+          try {
+            const parsed = JSON.parse(e.newValue);
+            if (!parsed || parsed.version !== 1) return;
+            this._applyingStorage = true;
+            this.store = normalizeStore(parsed);
+            if (this.recipeDraft && this.recipeDraft.id) {
+              const r = (this.store.recipes || []).find((x) => x.id === this.recipeDraft.id);
+              if (r) this.recipeDraft = clone(r);
+            }
+          } catch (err) {}
+          this.$nextTick(() => { this._applyingStorage = false; });
+        },
+        onPanelUnload() {
+          if (this.panelMode) this.undockPost({ type: 'dock', panel: this.panelMode });
+        },
         openDocReader() {
           if (!this.readerDoc) return this.toast('Open a document first.', 'warn');
           this.docReaderOpen = true;
@@ -5829,10 +6446,7 @@
           this.attachPreview = null;
         },
         openDocPopout() {
-          const d = this.readerDoc;
-          if (!d || !d.url) return this.toast('Open a document first.', 'warn');
-          const w = window.open(d.url, '_blank', 'noopener,noreferrer');
-          if (!w) this.toast('Allow pop-ups to open the document in a new window.', 'warn');
+          this.popOutPanel('docs');
         },
         focusAttachRow(rec) {
           if (!rec || !this.currentTable) return;
@@ -5850,7 +6464,8 @@
             doc.url = url; doc.kind = kind; doc.text = text || doc.text || ''; doc.name = meta.name;
           }
           this.activeDocId = doc.id;
-          this.splitOpen = true;
+          if (this.undocked.docs) this.sendUndockPdf();
+          else this.splitOpen = true;
           this.docReaderOpen = false;
           this.attachPreview = null;
           this.pdfZoom = 'page-width';
@@ -5898,7 +6513,7 @@
           if (kind === 'text') doc.text = await file.text();
           this.docs.push(doc);
           this.activeDocId = doc.id;
-          this.splitOpen = true;
+          if (!this.undocked.docs) this.splitOpen = true;
           this.pdfZoom = 'page-width';
           if (kind === 'pdf' && this.splitWidth < 52) this.splitWidth = 52;
           this.audit('document.open', file.name, kind);
@@ -5951,9 +6566,11 @@
           }
         },
         openRecipes() {
+          if (this.undocked.recipes && this.panelMode !== 'recipes') return this.focusPopout('recipes');
           this.recipeOpen = true;
           const cur = this.store.recipes.find((r) => r.id === this.selectedRecipeId) || this.store.recipes[0];
-          this.recipeDraft = cur ? clone(cur) : this.freshRecipe();
+          if (cur) this.editRecipe(cur);
+          else this.recipeDraft = this.freshRecipe();
         },
         freshRecipe() {
           return {
@@ -5966,12 +6583,14 @@
             attachColumnId: '',
             headerFields: [{ id: uid('hf'), label: 'Order number', regex: '', group: 1, columnId: '', transform: 'text', fill: 'pdf', lookup: emptyRecipeLookup() }],
             lineRegex: '',
-            lineFields: []
+            lineFields: [],
+            maps: []
           };
         },
         newRecipe() { this.recipeDraft = this.freshRecipe(); },
         editRecipe(r) {
           this.recipeDraft = clone(r);
+          if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
           (this.recipeDraft.headerFields || []).forEach((f) => {
             if (!f.fill) f.fill = 'pdf';
             if (!f.lookup) f.lookup = emptyRecipeLookup();
@@ -5980,6 +6599,188 @@
             if (!f.fill) f.fill = 'pdf';
             if (!f.lookup) f.lookup = emptyRecipeLookup();
           });
+          (this.recipeDraft.maps || []).forEach((m) => {
+            if (!m.fill) m.fill = 'pdf';
+            if (!m.lookup) m.lookup = emptyRecipeLookup();
+            if (!m.lookup.also) m.lookup.also = [];
+          });
+        },
+        mapTargetColumns(m) {
+          return (m && m.role === 'line') ? this.recipeLineColumns : this.recipeHeaderColumns;
+        },
+        recipeMapColumnName(m) {
+          const tables = this.store.tables || [];
+          for (let i = 0; i < tables.length; i++) {
+            const c = findColumn(tables[i], m.columnId);
+            if (c) return tables[i].name + ' · ' + c.name;
+          }
+          return m.columnId;
+        },
+        startRecipeTeach() {
+          if (this.mode !== 'architect') return this.requestArchitect();
+          if (!this.recipeDraft.id) return;
+          if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
+          this.saveRecipe();
+          if (this.panelMode !== 'recipes') this.recipeOpen = false;
+          if (!this.undocked.docs && this.panelMode !== 'docs') this.splitOpen = true;
+          this.view = 'grid';
+          const ht = findTable(this.store, this.recipeDraft.headerTableId);
+          if (ht) {
+            this.currentTableId = ht.id;
+            this.currentGroupId = ht.groupId;
+          }
+          this.recipeTeach = { active: true, colId: '', line: false };
+          this.selectedRecipeId = this.recipeDraft.id;
+          if (this.splitWidth < 46) this.splitWidth = 48;
+          if (!this.activeDoc || this.activeDoc.kind !== 'pdf') {
+            this.recipeHint = 'Click Open file on the left and choose the client PDF, then pick a column in the gold bar and click the value on the page.';
+            this.toast('Open the PDF first (Docs → Open file), then pick a column and click it on the page.');
+          } else {
+            this.recipeHint = 'Pick a column in the gold bar, then click that value on the PDF.';
+            this.loadPdfView(this.activeDoc);
+          }
+        },
+        stopRecipeTeach() {
+          this.saveRecipe();
+          this.recipeTeach = { active: false, colId: '', line: false };
+        },
+        onTeachColChange() {
+          const col = this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
+          if (col) this.recipeHint = 'Click “' + col.name + '” on the PDF.';
+        },
+        onTeachLineToggle() {
+          this.recipeTeach.colId = '';
+          if (this.recipeTeach.line) {
+            const lt = findTable(this.store, this.recipeDraft.lineTableId);
+            if (lt) {
+              this.currentTableId = lt.id;
+              this.currentGroupId = lt.groupId;
+            } else {
+              this.toast('Set a line-item sheet on the recipe first.', 'warn');
+              this.recipeTeach.line = false;
+            }
+          }
+        },
+        pdfItemStyle(it) {
+          return {
+            left: (it.nx * 100) + '%',
+            top: (it.ny * 100) + '%',
+            width: Math.max(it.nw * 100, 0.8) + '%',
+            height: Math.max(it.nh * 100, 0.8) + '%'
+          };
+        },
+        pdfHitClass(page, it) {
+          const maps = (this.recipeDraft && this.recipeDraft.maps) || [];
+          const mapped = maps.some((m) => m.page === page.num && Math.abs(m.nx - it.nx) < 0.008 && Math.abs(m.ny - it.ny) < 0.008);
+          return { mapped, pick: this.recipeTeach.active && !!this.recipeTeach.colId };
+        },
+        onPdfTextClick(page, it, extra) {
+          extra = extra || {};
+          if (this.panelMode === 'docs' && !extra.fromPopout) {
+            const lab = leftLabelFor(page.items, it);
+            this.undockPost({ type: 'pdf-hit', pageNum: page.num, item: { str: it.str, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh }, label: lab });
+            return;
+          }
+          if (!this.recipeTeach.active || !this.recipeTeach.colId) {
+            if (this.recipeTeach.active) this.toast('Pick a column in the gold bar first.', 'warn');
+            return;
+          }
+          let sample = String(it.str || '').replace(/\s+/g, ' ').trim();
+          if (!sample) return;
+          const lab = extra.label != null ? extra.label : leftLabelFor(page.items, it);
+          if (lab && sample.toLowerCase().indexOf(lab.toLowerCase()) === 0) {
+            sample = sample.slice(lab.length).replace(/^[\s:]+/, '') || sample;
+          }
+          const mapCol = this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
+          let transform = guessTransform(sample);
+          if (transform === 'number' && mapCol && (isLinkCol(mapCol) || mapCol.type === 'text' || mapCol.type === 'search' || /product|sku|customer/i.test(mapCol.name || ''))) {
+            transform = 'text';
+          }
+          const map = {
+            id: uid('map'),
+            columnId: this.recipeTeach.colId,
+            role: this.recipeTeach.line ? 'line' : 'header',
+            page: page.num,
+            nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh,
+            sample,
+            label: lab,
+            transform,
+            fill: isLinkCol(mapCol) ? 'lookup' : 'pdf'
+          };
+          const hintTable = tableForColumnHint(this.store, mapCol);
+          if (isLinkCol(mapCol) && mapCol.link) {
+            const lt = findTable(this.store, mapCol.link.tableId);
+            const skuCol = lt && /^\d+$/.test(sample) && (lt.columns || []).find((c) => /sku|item\s*no|ean|varenr|code/i.test(c.name));
+            map.lookup = {
+              tableId: mapCol.link.tableId,
+              matchColumnId: (skuCol && skuCol.id) || mapCol.link.searchColumnId || mapCol.link.matchColumnId || mapCol.link.displayColumnId,
+              out: 'link',
+              match: /^\d+$/.test(sample) ? 'equals' : 'contains',
+              also: []
+            };
+            map.fill = 'lookup';
+          } else if (hintTable && /product|customer|sku|item/i.test(mapCol.name || '')) {
+            const skuCol = /^\d+$/.test(sample) && (hintTable.columns || []).find((c) => /sku|item\s*no|ean|varenr|code/i.test(c.name));
+            const nameCol = (hintTable.columns || []).find((c) => /name|navn/i.test(c.name));
+            map.fill = 'lookup';
+            map.lookup = {
+              tableId: hintTable.id,
+              matchColumnId: (skuCol && skuCol.id) || (nameCol && nameCol.id) || (hintTable.columns[0] && hintTable.columns[0].id),
+              out: isLinkCol(mapCol) ? 'link' : ((nameCol && nameCol.id) || 'link'),
+              match: /^\d+$/.test(sample) ? 'equals' : 'contains',
+              also: []
+            };
+          } else {
+            map.lookup = emptyRecipeLookup();
+          }
+          if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
+          this.recipeDraft.maps = this.recipeDraft.maps.filter((m) => !(m.columnId === map.columnId && m.role === map.role));
+          this.recipeDraft.maps.push(map);
+          if (!this.recipeDraft.detect) this.recipeDraft.detect = sample;
+          this.saveRecipe();
+          this.recipeTeach.colId = '';
+          this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
+          this.toast('Mapped ' + sample + ' → column.');
+        },
+        async loadPdfView(doc) {
+          if (!doc || !doc.url || !window.pdfjsLib) return;
+          if (this.pdfView.src === doc.url && this.pdfView.pages.length) return;
+          this._pdfLoad = (this._pdfLoad || 0) + 1;
+          const token = this._pdfLoad;
+          this.pdfView = { pages: [], src: doc.url };
+          try {
+            const pdf = await window.pdfjsLib.getDocument({ url: doc.url, withCredentials: false }).promise;
+            const pages = [];
+            for (let p = 1; p <= pdf.numPages; p++) {
+              const page = await pdf.getPage(p);
+              const viewport = page.getViewport({ scale: 1.35 });
+              const content = await page.getTextContent();
+              const items = explodePdfWords(content.items.filter((it) => it.str && String(it.str).trim()).map((it) => {
+                const r = pdfItemRect(it, viewport);
+                return {
+                  str: it.str,
+                  nx: r.x / viewport.width,
+                  ny: r.y / viewport.height,
+                  nw: r.w / viewport.width,
+                  nh: r.h / viewport.height
+                };
+              }));
+              pages.push({ num: p, width: viewport.width, height: viewport.height, items, viewport, page });
+            }
+            if (token !== this._pdfLoad) return;
+            this.pdfView = { pages, src: doc.url };
+            await this.$nextTick();
+            if (token !== this._pdfLoad) return;
+            for (let i = 0; i < pages.length; i++) {
+              const pg = pages[i];
+              const canvas = document.getElementById('pdf-canvas-' + pg.num);
+              if (!canvas) continue;
+              const ctx = canvas.getContext('2d');
+              await pg.page.render({ canvasContext: ctx, viewport: pg.viewport }).promise;
+            }
+          } catch (e) {
+            this.recipeHint = 'Could not render this PDF for clicking.';
+          }
         },
         lookupColumns(tableId) {
           const t = findTable(this.store, tableId);
@@ -5987,7 +6788,26 @@
         },
         ensureRecipeLookup(f) {
           if (!f.lookup) f.lookup = emptyRecipeLookup();
+          if (!f.lookup.also) f.lookup.also = [];
           if (!f.fill) f.fill = 'pdf';
+        },
+        addMapAlso(m) {
+          this.ensureRecipeLookup(m);
+          m.lookup.also.push({ columnId: '', out: 'link' });
+        },
+        applyRecipeLookupAlso(table, rec, field, raw) {
+          if (!field || field.fill !== 'lookup' || !field.lookup || !table || !rec) return;
+          const extras = field.lookup.also || [];
+          if (!extras.length) return;
+          const hit = findRecipeLookupRow(this.store, field, raw);
+          if (!hit) return;
+          extras.forEach((a) => {
+            const col = findColumn(table, a.columnId);
+            if (!col) return;
+            let val = lookupAlsoValue(this.store, field, a, hit);
+            val = coerceRecipeCell(this.store, col, { fill: 'pdf' }, val);
+            if (val !== '' && val != null) this.setCell(rec, col, val, true, table);
+          });
         },
         addRecipeHeaderField() {
           this.recipeDraft.headerFields.push({ id: uid('hf'), label: 'Field', regex: '', group: 1, columnId: '', transform: 'text', fill: 'pdf', lookup: emptyRecipeLookup() });
@@ -6028,6 +6848,58 @@
           }
           this.recipeBusy = false;
         },
+        recipeForAttach(col, text) {
+          const tableId = this.currentTableId;
+          const list = (this.store.recipes || []).filter((r) => !r.headerTableId || r.headerTableId === tableId);
+          const onCol = list.filter((r) => !r.attachColumnId || r.attachColumnId === col.id);
+          const pool = onCol.length ? onCol : list;
+          const hit = detectRecipe(pool, text);
+          if (hit) return hit;
+          if (pool.length === 1) return pool[0];
+          return pool.find((r) => r.attachColumnId === col.id) || null;
+        },
+        async fillRowFromAttach(rec, col) {
+          if (!rec || !col || rec.locked) return;
+          const meta = isAttachMeta(rawStored(rec, col)) ? rawStored(rec, col) : null;
+          if (!meta) return;
+          await loadAttachUrl(meta);
+          const hit = attachmentBlobs.get(meta.id);
+          const blob = hit && hit.blob;
+          if (!blob) return;
+          const kind = kindOf({ name: meta.name, type: meta.type });
+          if (kind !== 'pdf' && kind !== 'text') {
+            this.toast('File attached. Recipes fill from PDFs or text files.');
+            return;
+          }
+          const url = hit.url || URL.createObjectURL(blob);
+          const doc = { id: 'att-' + meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: '', file: blob };
+          this.recipeBusy = true;
+          this.recipeHint = 'Reading attached file…';
+          try {
+            doc.text = await this.readDocText(doc);
+            const recipe = this.recipeForAttach(col, doc.text);
+            if (!recipe) {
+              this.recipeHint = 'File attached. No matching recipe — pick one in Docs and Fill sheet, or set detect text on a recipe.';
+              this.toast('Attached ' + meta.name + '. No recipe matched, so other cells were left as they are.');
+              this.recipeBusy = false;
+              return;
+            }
+            this.selectedRecipeId = recipe.id;
+            const existing = this.docs.find((d) => d.attachId === meta.id);
+            if (existing) {
+              existing.url = url; existing.text = doc.text; existing.file = blob; existing.kind = kind;
+              this.activeDocId = existing.id;
+              doc.id = existing.id;
+            } else {
+              this.docs.push(Object.assign({}, doc, { attachId: meta.id }));
+              this.activeDocId = doc.id;
+            }
+            await this.applyRecipeFill(recipe, doc, rec, { skipAttach: true, replaceLines: true, keepView: true });
+          } catch (e) {
+            this.toast('Could not read the attached file for a recipe.', 'error');
+            this.recipeBusy = false;
+          }
+        },
         async runRecipeOnDoc() {
           const recipe = this.store.recipes.find((r) => r.id === this.selectedRecipeId);
           const doc = this.activeDoc;
@@ -6035,8 +6907,6 @@
           this.recipeBusy = true;
           this.recipeHint = 'Reading ' + recipe.name + '…';
           try {
-            if (!doc.text) doc.text = await this.readDocText(doc);
-            const extracted = runRecipeExtract(doc.text, recipe);
             const headerTable = findTable(this.store, recipe.headerTableId) || this.currentTable;
             if (!headerTable) {
               this.toast('Pick a header sheet on the recipe.', 'warn');
@@ -6045,11 +6915,42 @@
             }
             const rec = this.blankRecord(headerTable);
             headerTable.records.push(rec);
+            await this.applyRecipeFill(recipe, doc, rec, {});
+          } catch (e) {
+            this.recipeHint = 'Could not apply this recipe to the file.';
+            this.toast('Recipe fill failed. Try Test on open PDF in Recipes.', 'error');
+            this.recipeBusy = false;
+          }
+        },
+        async applyRecipeFill(recipe, doc, rec, opts) {
+          opts = opts || {};
+          try {
+            if (!doc.text) doc.text = await this.readDocText(doc);
+            if (doc.kind === 'pdf' && (!this.pdfView.pages.length || this.pdfView.src !== doc.url)) await this.loadPdfView(doc);
+            const extracted = runRecipeExtract(doc.text, recipe);
+            const click = (recipe.maps || []).length && this.pdfView.pages.length ? extractFromMaps(this.pdfView.pages, recipe) : { header: {}, lines: [] };
+            const headerTable = findTable(this.store, recipe.headerTableId) || this.currentTable;
+            if (!headerTable || !rec) {
+              this.toast('Pick a header sheet on the recipe.', 'warn');
+              this.recipeBusy = false;
+              return;
+            }
             (recipe.headerFields || []).forEach((f) => {
               const col = findColumn(headerTable, f.columnId);
               const raw = f.fill === 'fixed' ? f.fixed : recipeFieldValue(doc.text, f);
-              const val = resolveRecipeFill(this.store, f, raw);
+              const val = coerceRecipeCell(this.store, col, f, raw);
               if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
+            });
+            Object.keys(click.header).forEach((colId) => {
+              const col = findColumn(headerTable, colId);
+              const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role !== 'line');
+              const raw = click.header[colId];
+              const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
+              if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
+              else if (col && raw !== '' && raw != null && (isLinkCol(col) || /product|customer|sku/i.test(col.name || ''))) {
+                this.toast(col.name + ': no match for “' + raw + '”. Add that SKU/name on Products/Customers, or set lookup on the click.', 'warn');
+              }
+              if (map) this.applyRecipeLookupAlso(headerTable, rec, map, raw);
             });
             if (recipe.statusColumnId && recipe.statusValue) {
               const sc = findColumn(headerTable, recipe.statusColumnId);
@@ -6064,7 +6965,7 @@
                 if (hit) this.setCell(rec, cc, hit.id, true, headerTable);
               }
             }
-            if (recipe.attachColumnId && doc.file) {
+            if (!opts.skipAttach && recipe.attachColumnId && doc.file) {
               const ac = findColumn(headerTable, recipe.attachColumnId);
               if (ac && ac.type === 'attachment') {
                 const meta = await fileToAttachMeta(doc.file);
@@ -6072,7 +6973,28 @@
               }
             }
             const lineTable = findTable(this.store, recipe.lineTableId);
-            if (lineTable && extracted.lines.length) {
+            if (lineTable && opts.replaceLines && recipe.lineLinkColumnId) {
+              const lc = findColumn(lineTable, recipe.lineLinkColumnId);
+              if (lc) lineTable.records = lineTable.records.filter((r) => rawStored(r, lc) !== rec.id);
+            }
+            if (lineTable && click.lines.length) {
+              click.lines.forEach((row) => {
+                const lr = this.blankRecord(lineTable);
+                lineTable.records.push(lr);
+                if (recipe.lineLinkColumnId) {
+                  const lc = findColumn(lineTable, recipe.lineLinkColumnId);
+                  if (lc) this.setCell(lr, lc, rec.id, true, lineTable);
+                }
+                Object.keys(row).forEach((colId) => {
+                  const col = findColumn(lineTable, colId);
+                  const map = (recipe.maps || []).find((m) => m.columnId === colId && m.role === 'line');
+                  const raw = row[colId];
+                  const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
+                  if (col && val !== '' && val != null) this.setCell(lr, col, val, true, lineTable);
+                  if (map) this.applyRecipeLookupAlso(lineTable, lr, map, raw);
+                });
+              });
+            } else if (lineTable && extracted.lines.length) {
               const matches = extractRecipeLines(doc.text, recipe);
               matches.forEach((m) => {
                 const lr = this.blankRecord(lineTable);
@@ -6085,7 +7007,7 @@
                   const col = findColumn(lineTable, f.columnId);
                   if (!col) return;
                   const raw = f.fill === 'fixed' ? f.fixed : transformRecipeValue(m[f.group], f.transform);
-                  const val = resolveRecipeFill(this.store, f, raw);
+                  const val = coerceRecipeCell(this.store, col, f, raw);
                   if (val !== '' && val != null) this.setCell(lr, col, val, true, lineTable);
                 });
               });
@@ -6095,11 +7017,12 @@
             this.selectedRecordId = rec.id;
             const first = headerTable.columns[0];
             if (first) this.applySelection({ recId: rec.id, colId: first.id }, { recId: rec.id, colId: first.id });
-            this.view = this.splitOpen ? 'form' : 'grid';
-            const n = extracted.lines.length;
+            if (!opts.keepView) this.view = this.splitOpen ? 'form' : 'grid';
+            this.$nextTick(() => this.refreshSheetValues());
+            const n = (click.lines.length || extracted.lines.length);
             this.recipeHint = 'Filled from ' + recipe.name + (n ? ' · ' + n + ' line' + (n === 1 ? '' : 's') : '') + '. Check the row, then edit anything the PDF read poorly.';
             this.audit('recipe.apply', recipe.name, doc.name);
-            this.toast('Filled a ' + headerTable.name + ' row from ' + recipe.name + '.');
+            this.toast((opts.skipAttach ? 'Filled this row from ' : 'Filled a ' + headerTable.name + ' row from ') + recipe.name + '.');
           } catch (e) {
             this.recipeHint = 'Could not apply this recipe to the file.';
             this.toast('Recipe fill failed. Try Test on open PDF in Recipes.', 'error');
@@ -6348,6 +7271,15 @@
           if (resolveRecipeFill(lkWs, prodF, '306832') !== 'rec_prod_snaps') console.warn('product sku lookup failed');
           const fixF = remR.headerFields.find((f) => f.fill === 'fixed');
           if (resolveRecipeFill(lkWs, fixF, '') !== 'Draft') console.warn('fixed recipe fill failed');
+          const ord = lkWs.tables.find((x) => x.name === 'Orders');
+          const custCol = ord.columns.find((c) => c.name === 'Customer');
+          if (matchLinkedRecord(lkWs, custCol, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('search column PDF match failed');
+          if (coerceRecipeCell(lkWs, custCol, { fill: 'pdf' }, 'REMA Grønt') !== 'rec_cust_rema') console.warn('coerce search cell failed');
+          const linesT = lkWs.tables.find((x) => x.name === 'Line Items');
+          const lineProdCol = linesT.columns.find((c) => c.name === 'Product');
+          if (matchLinkedRecord(lkWs, lineProdCol, '306832') !== 'rec_prod_snaps') console.warn('product SKU link match failed');
+          const fakeProd = { name: 'Product', type: 'text' };
+          if (String(coerceRecipeCell(lkWs, fakeProd, { fill: 'pdf' }, '306832')).toLowerCase().indexOf('sugar') < 0) console.warn('product SKU should fill product name');
           const spec = snapshotCellRule(cust2.records[0], city2);
           spec.rule.formula = { expression: 'XLOOKUP(C1, "Products", "Item No", "Name")', resultType: 'auto' };
           const shifted = shiftA1InText(spec.rule.formula.expression, 1, 0);
@@ -6440,11 +7372,14 @@
           this.store = emptyStore();
         }
         this.ready = true;
+        this.initUndock();
         this.$nextTick(() => this.bindSheet());
         window.addEventListener('paste', this.onPaste);
         window.addEventListener('copy', this.onCopy);
         window.addEventListener('click', this.onDocClick);
         window.addEventListener('keydown', this.onWinKey);
+        window.addEventListener('storage', this.onWorkspaceStorage);
+        window.addEventListener('beforeunload', this.onPanelUnload);
       },
       unmounted() {
         window.removeEventListener('paste', this.onPaste);
@@ -6454,6 +7389,10 @@
         window.removeEventListener('mouseup', this.endSelectDrag);
         window.removeEventListener('mousemove', this.onSelectPointerMove);
         window.removeEventListener('keydown', this.onWinKey);
+        window.removeEventListener('storage', this.onWorkspaceStorage);
+        window.removeEventListener('beforeunload', this.onPanelUnload);
+        if (this._popWatch) clearInterval(this._popWatch);
+        if (this._undockCh) try { this._undockCh.close(); } catch (e) {}
         this.destroySheet();
       }
     });
