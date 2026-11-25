@@ -999,7 +999,7 @@
             </div>
             <div>
               <div class="text-sm font-medium mb-1">Clicked on the PDF</div>
-              <p class="text-[12px] text-mute mb-2">After a click, choose what to do with that value: keep the PDF text, look it up and <strong class="text-mist">link</strong> a row, copy another field from that row, or type a fixed value. Maps marked <strong class="text-mist">each line</strong> are read once on the first product row, then again on every later product row — so 360, 1.344 and 720 become three different Qty cells, not one copied value.</p>
+              <p class="text-[12px] text-mute mb-2">After a click, choose what to do with that value: keep the PDF text, look it up and <strong class="text-mist">link</strong> a row, copy another field from that row, or type a fixed value. For a repeating column you can click <strong class="text-mist">more product numbers on the same column</strong> (306810, then 306806, then 306805) — they stay on that one mapping as unique choices, they do not overwrite each other.</p>
               <p v-if="!(recipeDraft.maps && recipeDraft.maps.length)" class="text-[12px] text-mute mb-2">Nothing clicked yet. Open a PDF with Docs, then Teach on PDF.</p>
               <div v-for="(m, i) in (recipeDraft.maps || [])" :key="m.id" class="rounded-lg border border-line p-2 mb-2 space-y-2 text-sm">
                 <div class="flex flex-wrap items-center gap-2">
@@ -1007,8 +1007,8 @@
                     <option v-for="c in mapTargetColumns(m)" :key="c.id" :value="c.id">{{ c.name }}</option>
                   </select>
                   <span class="text-mute">←</span>
-                  <span class="font-mono text-[12px]">{{ m.sample }}</span>
-                  <span class="text-[11px] rounded px-1.5 py-0.5 bg-ink-900 text-mute">{{ m.role === 'line' ? 'each line' : 'once' }}</span>
+                  <span class="font-mono text-[12px]">{{ mapChoiceLabel(m).join(' · ') || m.sample }}</span>
+                  <span class="text-[11px] rounded px-1.5 py-0.5 bg-ink-900 text-mute">{{ m.role === 'line' ? 'each unique line' : 'once' }}</span>
                   <button v-if="mode==='architect'" class="ml-auto text-[11px] text-red-300" @click="recipeDraft.maps.splice(i,1)">Remove</button>
                 </div>
                 <label class="block text-[11px] text-mute">Put in that cell
@@ -2864,6 +2864,22 @@
       return keys.length ? pick(row[keys[0]]) : '';
     }
 
+    function mapChoiceLabel(map) {
+      const seen = [];
+      const add = (s) => {
+        const t = lineSkipNeedle(s);
+        if (t && seen.indexOf(t) < 0) seen.push(t);
+      };
+      add(map && map.sample);
+      ((map && map.choices) || []).forEach((c) => add(c && (c.sample || c)));
+      return seen;
+    }
+
+    function samePdfColumn(a, b) {
+      if (!a || !b) return false;
+      return Math.abs((a.nx + (a.nw || 0) / 2) - (b.nx + (b.nw || 0) / 2)) < 0.05;
+    }
+
     function uniqueRecipeLines(recipe, lines) {
       const uniq = recipe && recipe.lineUnique;
       if (!uniq || !uniq.enabled || !lines || !lines.length) return lines || [];
@@ -4488,7 +4504,7 @@
         teachHintText() {
           if (this.recipeTeach.line) {
             if (this.recipeTeach.colId) {
-              return 'Click that value on the first product line only (not the Europool row). Qty and price on later products are read from the same columns.';
+              return 'Click values on this column. Extra product numbers on the same column are more unique lines, not a replacement. Skip crate numbers ending in 15.';
             }
             return 'Keep Repeats on. Map Item No, Qty, and Price once on the first product line. Upload creates one Line Items row per unique product (crates skipped).';
           }
@@ -4533,7 +4549,7 @@
         }
       },
       methods: {
-        rawStored, displayForLink, hasFormula,
+        rawStored, displayForLink, hasFormula, mapChoiceLabel,
         colLetter(col) {
           const t = this.currentTable;
           if (!t || !col) return '';
@@ -7424,7 +7440,14 @@
         },
         mappedHitsForPage(page) {
           const maps = (this.recipeDraft && this.recipeDraft.maps) || [];
-          return maps.filter((m) => m.page === page.num);
+          const out = [];
+          maps.forEach((m) => {
+            if (m.page === page.num) out.push(m);
+            (m.choices || []).forEach((c, i) => {
+              if ((c.page || m.page) === page.num) out.push({ id: m.id + '-c' + i, nx: c.nx, ny: c.ny, nw: c.nw || m.nw, nh: c.nh || m.nh });
+            });
+          });
+          return out;
         },
         onPdfPageMove(ev, page) {
           if (!this.recipeTeach.active) return;
@@ -7511,15 +7534,34 @@
             map.transform = 'text';
           }
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
-          this.recipeDraft.maps = this.recipeDraft.maps.filter((m) => !(m.columnId === map.columnId && m.role === map.role));
+          const existing = this.recipeDraft.maps.find((m) => m.columnId === map.columnId && m.role === map.role);
+          if (existing && map.role === 'line' && samePdfColumn(existing, map)) {
+            if (!Array.isArray(existing.choices)) existing.choices = [];
+            const already = mapChoiceLabel(existing);
+            if (already.indexOf(sample) >= 0) {
+              this.toast(sample + ' is already on this column.');
+              return;
+            }
+            if (recipeLineSkipped(this.recipeDraft, { [existing.columnId]: sample }, [sample])) {
+              this.toast(sample + ' is a crate/box line — skipped. Click the next product number in this column.');
+              return;
+            }
+            existing.choices.push({ sample, page: page.num, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh });
+            this.saveRecipe();
+            this.recipeHint = this.recipeMapColumnName(existing) + ' now has ' + mapChoiceLabel(existing).join(', ') + '. Same column — click more products, or pick Qty/Price.';
+            this.toast('Added ' + sample + ' on the same column. Unique products: ' + mapChoiceLabel(existing).join(', ') + '.');
+            return;
+          }
+          if (existing) this.recipeDraft.maps = this.recipeDraft.maps.filter((m) => m !== existing);
+          map.choices = [{ sample, page: page.num, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh }];
           this.recipeDraft.maps.push(map);
           if (!this.recipeDraft.detect) this.recipeDraft.detect = sample;
           this.saveRecipe();
-          this.recipeTeach.colId = '';
           if (map.role === 'line') {
-            this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + ' on every product line. Next: pick Qty or Price, still with Repeats on, and click it on the same first product line.';
-            this.toast('Each product row will get its own ' + this.recipeMapColumnName(map) + ' (this line was ' + sample + ').');
+            this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. Keep this column selected and click the other product numbers in the same PDF column, or pick Qty/Price.';
+            this.toast('Mapped ' + sample + '. Click more unique products in this same column if you want — they will not overwrite.');
           } else {
+            this.recipeTeach.colId = '';
             this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
             this.toast('Mapped ' + sample + ' → column.');
           }
