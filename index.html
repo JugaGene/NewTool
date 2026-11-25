@@ -142,8 +142,16 @@
     .pdf-hits { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
     .pdf-hit { position: absolute; border: 1px solid transparent; background: transparent; padding: 0; pointer-events: none; }
     .pdf-teach .pdf-page { cursor: crosshair; user-select: none; touch-action: none; }
-    .pdf-teach .pdf-hit.hover { background: rgba(245, 185, 66, 0.35); outline: 1px solid #f5b942; }
-    .pdf-teach .pdf-hit.marquee { background: rgba(245, 185, 66, 0.22); outline: 1px dashed #f5b942; }
+    .pdf-teach .pdf-hit.hover { background: rgba(245, 185, 66, 0.35); outline: 2px solid #f5b942; }
+    .pdf-teach .pdf-hit.marquee { background: rgba(245, 185, 66, 0.28); outline: 2px solid #f5b942; }
+    .pdf-phrase-chip {
+      position: absolute; left: 0; top: 0; z-index: 2; pointer-events: none;
+      transform: translateY(-110%);
+      max-width: 90%;
+      background: #f5b942; color: #0b1220; font-size: 12px; font-weight: 650;
+      line-height: 1.2; padding: 3px 8px; border-radius: 6px; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis;
+    }
     .pdf-hit.mapped { outline: 1px solid #3ecfbe; background: rgba(62, 207, 190, 0.2); }
     .pdf-hit.pick { cursor: pointer; }
     .panel-head { user-select: none; }
@@ -297,6 +305,7 @@
           One row per unique product
         </label>
         <span class="opacity-80">{{ teachHintText }}</span>
+        <span v-if="pdfSelectCaption" class="rounded-md bg-ink-900 text-gold px-2 py-0.5 font-mono text-[12px] max-w-[min(36rem,70vw)] truncate" :title="pdfSelectCaption">{{ pdfSelectCaption }}</span>
         <span v-if="teachLinePreview" class="w-full text-[12px] font-mono text-ink-900/90">Preview {{ teachLinePreview }}</span>
         <button v-if="!panelMode && !undocked.docs" class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="popOutPanel('docs')">Move to other monitor</button>
         <button class="ml-auto rounded-md bg-ink-900 text-gold px-2 py-1 text-[12px] font-semibold" @click="saveRecipe">Save recipe</button>
@@ -434,8 +443,12 @@
                     @pointerup="onPdfPageUp($event, page)" @pointercancel="clearPdfDrag" @mouseleave="onPdfPageLeave">
                     <canvas :ref="el => renderPdfCanvas(page, el)" :width="page.width" :height="page.height"></canvas>
                     <div class="pdf-hits">
-                      <div v-if="pdfMarquee && pdfMarquee.num===page.num" class="pdf-hit hover pick marquee" :style="pdfItemStyle(pdfMarquee)"></div>
-                      <div v-else-if="pdfHover && pdfHover.num===page.num" class="pdf-hit hover pick" :style="pdfItemStyle(pdfHover)"></div>
+                      <div v-if="pdfMarquee && pdfMarquee.num===page.num" class="pdf-hit hover pick marquee" :style="pdfItemStyle(pdfMarquee)">
+                        <div v-if="pdfSelectCaption" class="pdf-phrase-chip">{{ pdfSelectCaption }}</div>
+                      </div>
+                      <div v-else-if="pdfHover && pdfHover.num===page.num" class="pdf-hit hover pick" :style="pdfItemStyle(pdfHover)">
+                        <div v-if="pdfHover.str && /\s/.test(pdfHover.str)" class="pdf-phrase-chip">{{ pdfHover.str }}</div>
+                      </div>
                       <div v-for="m in mappedHitsForPage(page)" :key="m.id" class="pdf-hit mapped" :style="pdfItemStyle(m)"></div>
                     </div>
                   </div>
@@ -3689,6 +3702,71 @@
         .trim();
     }
 
+    function phraseBreakToken(it) {
+      const s = pdfItemText(it);
+      if (!s) return true;
+      if (skuLikeSample(s)) return true;
+      if (crateLineText(s)) return true;
+      if (/^(ks\.?|kolli|stk\.?|pcs\.?|antal)$/i.test(s)) return true;
+      if (isMoneySample(s)) return true;
+      if (isQtyToken(s) && !/[a-zæøå]/i.test(s)) return true;
+      return false;
+    }
+
+    function samePdfItem(a, b) {
+      if (!a || !b) return false;
+      if (a === b) return true;
+      return a.nx === b.nx && a.ny === b.ny && String(a.str) === String(b.str);
+    }
+
+    function expandPhraseRun(items, seed) {
+      if (!seed || !pdfItemText(seed)) return [];
+      if (phraseBreakToken(seed)) return [seed];
+      const y = pdfLineY(seed);
+      const line = itemsOnPdfLine(items, y, 0.018).slice().sort((a, b) => a.nx - b.nx);
+      let idx = line.findIndex((it) => samePdfItem(it, seed));
+      if (idx < 0) {
+        idx = line.findIndex((it) => Math.abs((it.nx + it.nw / 2) - (seed.nx + seed.nw / 2)) < 0.01);
+      }
+      if (idx < 0) return [seed];
+      const gap = 0.034;
+      let lo = idx;
+      let hi = idx;
+      while (lo > 0) {
+        const left = line[lo - 1];
+        if (phraseBreakToken(left)) break;
+        if (line[lo].nx - (left.nx + left.nw) > gap) break;
+        lo -= 1;
+      }
+      while (hi < line.length - 1) {
+        const right = line[hi + 1];
+        if (phraseBreakToken(right)) break;
+        if (right.nx - (line[hi].nx + line[hi].nw) > gap) break;
+        hi += 1;
+      }
+      return line.slice(lo, hi + 1);
+    }
+
+    function sweepPhraseOnLine(items, y, x0, x1) {
+      const left = Math.min(x0, x1);
+      const right = Math.max(x0, x1);
+      const pad = 0.012;
+      return itemsOnPdfLine(items, y, 0.02).slice().sort((a, b) => a.nx - b.nx).filter((it) => {
+        if (!pdfItemText(it) || phraseBreakToken(it)) return false;
+        const il = it.nx;
+        const ir = it.nx + it.nw;
+        const cx = (il + ir) / 2;
+        return cx >= left - pad && cx <= right + pad || (il < right && ir > left);
+      });
+    }
+
+    function phraseHitFromItems(picked) {
+      const list = (picked || []).filter(Boolean);
+      if (!list.length) return null;
+      const uni = unionPdfItems(list);
+      return Object.assign({ str: joinPdfItemTexts(list) }, uni);
+    }
+
     function itemsOverlappingBox(items, box) {
       const b = box || {};
       const region = { nx: b.nx, ny: b.ny, nw: Math.max(b.nw || 0, 0.004), nh: Math.max(b.nh || 0, 0.006) };
@@ -4643,7 +4721,8 @@
           recipeTeach: { active: false, colId: '', pick: '', line: false },
           pdfView: { pages: [], src: '', error: '' },
           pdfHover: null,
-          pdfDrag: null
+          pdfDrag: null,
+          pdfRangeAnchor: null
         };
       },
       computed: {
@@ -4977,7 +5056,24 @@
         pdfMarquee() {
           const d = this.pdfDrag;
           if (!d) return null;
+          if (d.picked && d.picked.length) return Object.assign({ num: d.page }, unionPdfItems(d.picked));
           return Object.assign({ num: d.page }, pdfNormBox(d.x0, d.y0, d.x1, d.y1));
+        },
+        pdfSelectCaption() {
+          const d = this.pdfDrag;
+          if (d && d.picked && d.picked.length) return joinPdfItemTexts(d.picked);
+          if (this.pdfHover && this.pdfHover.str && /\s/.test(this.pdfHover.str)) return this.pdfHover.str;
+          return '';
+        },
+        teachWantPhrase() {
+          if (!this.recipeTeach.active || !this.recipeTeach.colId) return false;
+          const pick = String(this.recipeTeach.pick || '');
+          const role = pick.indexOf(':') >= 0 ? pick.slice(0, pick.indexOf(':')) : '';
+          const col = this.teachColumns.find((c) => c.id === this.recipeTeach.colId && (!c.teachRole || c.teachRole === role || !role))
+            || this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
+          if (col && qtyLikeColumn(col)) return false;
+          if (this.recipeTeach.line) return true;
+          return !!(col && /product|name|navn|beskriv|vare|item/i.test(col.name || ''));
         },
         teachHintText() {
           const pick = String(this.recipeTeach.pick || '');
@@ -4988,14 +5084,14 @@
             return 'Click Antal kolli (56 / 112) or the header word “kolli”. Do not click 6 KG or 10 BAK — that is pack size. On Rema click 360 Ks. If you click pack size, ForgeGrid snaps to the box column.';
           }
           if (this.recipeTeach.colId && this.recipeTeach.line) {
-            return 'Keep this column selected. Drag across the full product name (Ærter Danske 500gr.) — one drag teaches the column. Fill reads every line in that band and matches Products on the name, not the customer SKU. Click a single token for qty or price.';
+            return 'Click any word in the product name — the rest of the phrase on that line is selected (Ærter Danske 500gr.). Drag left/right on the line to trim. Qty and price are still a single click.';
           }
           if (this.recipeTeach.colId) {
             return this.undocked.docs || this.panelMode === 'docs'
-              ? 'Click that value, or drag across several words, on the PDF window.'
-              : 'Click that value, or drag across several words, on the PDF at the left.';
+              ? 'Click the value (or any word in a name — the full phrase is taken).'
+              : 'Click the value on the PDF (or any word in a name — the full phrase is taken).';
           }
-          return 'Pick Line Items · Product, then drag the product name on the PDF (or click Item No if you still use SKU).';
+          return 'Pick Line Items · Product, then click any word in the product name on the PDF.';
         },
         teachLinePreview() {
           if (!this.recipeTeach.active) return '';
@@ -5038,7 +5134,7 @@
             if (this._remoteTeach) return;
             this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, pick: v.pick, line: v.line } });
             if (v && v.active && this.activeDoc && this.activeDoc.kind === 'pdf') this.ensurePdfTeachView(this.activeDoc);
-            if (!(v && v.active)) { this.pdfHover = null; this.pdfDrag = null; }
+            if (!(v && v.active)) { this.pdfHover = null; this.pdfDrag = null; this.pdfRangeAnchor = null; }
           }
         },
         docsPaneVisible(v) {
@@ -8124,11 +8220,47 @@
         onPdfPageLeave() {
           if (!this.pdfDrag) this.pdfHover = null;
         },
+        pdfWordAt(page, nx, ny) {
+          return pdfItemAt(page.items, nx, ny) || nearestPdfItem(page.items, nx, ny, 0.12, 0.04);
+        },
+        previewPhraseHover(page, hit) {
+          if (!hit) {
+            this.pdfHover = null;
+            return;
+          }
+          let box = hit;
+          if (this.teachWantPhrase && !phraseBreakToken(hit)) {
+            const run = expandPhraseRun(page.items, hit);
+            const joined = phraseHitFromItems(run);
+            if (joined && run.length > 1) box = joined;
+          }
+          const cur = this.pdfHover;
+          if (cur && cur.num === page.num && cur.str === box.str && cur.nx === box.nx && cur.nw === box.nw) return;
+          this.pdfHover = { num: page.num, str: box.str, nx: box.nx, ny: box.ny, nw: box.nw, nh: box.nh };
+        },
+        commitPhraseItems(page, picked, extra) {
+          const hit = phraseHitFromItems(picked);
+          if (!hit || !hit.str) return this.toast('Move a little along the name until the gold highlight covers it.', 'warn');
+          this.onPdfTextClick(page, hit, Object.assign({ phrase: picked.length > 1 || /\s/.test(hit.str) }, extra || {}));
+        },
         onPdfPageDown(ev, page) {
           if (!this.recipeTeach.active) return;
           if (ev.button != null && ev.button !== 0) return;
+          ev.preventDefault();
           const pt = pdfNormPoint(ev, ev.currentTarget);
-          this.pdfDrag = { page: page.num, x0: pt.nx, y0: pt.ny, x1: pt.nx, y1: pt.ny, moved: false };
+          const seed = this.pdfWordAt(page, pt.nx, pt.ny);
+          const y = seed ? pdfLineY(seed) : pt.ny;
+          const x = seed ? seed.nx + seed.nw / 2 : pt.nx;
+          this.pdfDrag = {
+            page: page.num,
+            x0: x,
+            y0: y,
+            x1: x,
+            y1: y,
+            yLock: y,
+            moved: false,
+            picked: seed && !phraseBreakToken(seed) ? expandPhraseRun(page.items, seed) : (seed ? [seed] : [])
+          };
           this.pdfHover = null;
           try { ev.currentTarget.setPointerCapture(ev.pointerId); } catch (e) {}
         },
@@ -8137,39 +8269,52 @@
           const pt = pdfNormPoint(ev, ev.currentTarget);
           if (this.pdfDrag && this.pdfDrag.page === page.num) {
             this.pdfDrag.x1 = pt.nx;
-            this.pdfDrag.y1 = pt.ny;
+            this.pdfDrag.y1 = this.pdfDrag.yLock;
             const dx = Math.abs(this.pdfDrag.x1 - this.pdfDrag.x0);
-            const dy = Math.abs(this.pdfDrag.y1 - this.pdfDrag.y0);
-            if (dx > 0.008 || dy > 0.006) this.pdfDrag.moved = true;
+            if (dx > 0.012) {
+              this.pdfDrag.moved = true;
+              this.pdfDrag.picked = sweepPhraseOnLine(page.items, this.pdfDrag.yLock, this.pdfDrag.x0, this.pdfDrag.x1);
+            }
             return;
           }
-          const hit = pdfItemAt(page.items, pt.nx, pt.ny);
+          const hit = this.pdfWordAt(page, pt.nx, pt.ny);
           if (!hit) {
             if (this.pdfHover) this.pdfHover = null;
             return;
           }
-          const cur = this.pdfHover;
-          if (cur && cur.num === page.num && cur.nx === hit.nx && cur.ny === hit.ny && cur.str === hit.str) return;
-          this.pdfHover = { num: page.num, str: hit.str, nx: hit.nx, ny: hit.ny, nw: hit.nw, nh: hit.nh };
+          this.previewPhraseHover(page, hit);
         },
         onPdfPageUp(ev, page) {
           if (!this.recipeTeach.active) return;
           const drag = this.pdfDrag;
           this.pdfDrag = null;
           const pt = pdfNormPoint(ev, ev.currentTarget);
+          const word = this.pdfWordAt(page, pt.nx, pt.ny);
           if (drag && drag.moved) {
-            const box = pdfNormBox(drag.x0, drag.y0, pt.nx, pt.ny);
-            const picked = itemsOverlappingBox(page.items, box);
-            if (!picked.length) return this.toast('Drag over the words you want — nothing was inside that box.', 'warn');
-            const joined = joinPdfItemTexts(picked);
-            const uni = unionPdfItems(picked);
-            const hit = Object.assign({ str: joined }, uni);
-            this.onPdfTextClick(page, hit, { phrase: picked.length > 1 || /\s/.test(joined) });
+            const picked = (drag.picked && drag.picked.length)
+              ? drag.picked
+              : sweepPhraseOnLine(page.items, drag.yLock, drag.x0, pt.nx);
+            this.commitPhraseItems(page, picked);
             return;
           }
-          const hit = pdfItemAt(page.items, pt.nx, pt.ny);
-          if (!hit) return this.toast('Click closer to the word you want to map, or drag across several words.', 'warn');
-          this.onPdfTextClick(page, hit);
+          if (!word) return this.toast('Click a word in the name (the gold highlight shows what will be taken).', 'warn');
+          if (ev.shiftKey && this.pdfRangeAnchor && this.pdfRangeAnchor.page === page.num) {
+            const y = pdfLineY(this.pdfRangeAnchor);
+            const picked = sweepPhraseOnLine(page.items, y, this.pdfRangeAnchor.nx, word.nx + word.nw);
+            this.commitPhraseItems(page, picked.length ? picked : [word]);
+            return;
+          }
+          this.pdfRangeAnchor = { page: page.num, nx: word.nx, ny: word.ny, nw: word.nw, str: word.str };
+          if (ev.ctrlKey || ev.metaKey || ev.altKey) {
+            this.onPdfTextClick(page, word);
+            return;
+          }
+          if (this.teachWantPhrase && !phraseBreakToken(word)) {
+            const run = expandPhraseRun(page.items, word);
+            this.commitPhraseItems(page, run.length ? run : [word]);
+            return;
+          }
+          this.onPdfTextClick(page, word);
         },
         onPdfTextClick(page, it, extra) {
           extra = extra || {};
@@ -9255,6 +9400,15 @@
             { prod: 'Ærter Danske 500gr.', sku: '222222' }
           ]);
           if (uniqName.length !== 1) console.warn('same product name with different customer SKUs is one line', uniqName);
+          const danske = namePages[0].items.find((x) => x.str === 'Danske');
+          const runDanske = joinPdfItemTexts(expandPhraseRun(namePages[0].items, danske));
+          if (runDanske !== 'Ærter Danske 500gr.') console.warn('clicking Danske should take the whole name', runDanske);
+          const skuOnly = joinPdfItemTexts(expandPhraseRun(namePages[0].items, namePages[0].items.find((x) => x.str === '306810')));
+          if (skuOnly !== '306810') console.warn('SKU click must stay one token', skuOnly);
+          const qtyOnly = joinPdfItemTexts(expandPhraseRun(namePages[0].items, namePages[0].items.find((x) => x.str === '360')));
+          if (qtyOnly !== '360') console.warn('qty click must stay one token', qtyOnly);
+          const swept = joinPdfItemTexts(sweepPhraseOnLine(namePages[0].items, 0.20 + 0.009, 0.18, 0.38));
+          if (swept !== 'Ærter Danske 500gr.') console.warn('line sweep should snap to name words, not 360', swept);
           const mapCols = recipeMapTargetColumns({ tables: [
             { id: 'tbl_oh', name: 'Order Handling', columns: [{ id: 'col_pack', name: 'Packed Product' }] },
             { id: 'tbl_lines', name: 'Line Items', columns: [{ id: 'col_l_itemno', name: 'Item No' }] }
