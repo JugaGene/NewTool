@@ -133,8 +133,8 @@
     .pdf-page canvas { display: block; width: 100%; height: auto; }
     .pdf-hits { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
     .pdf-hit { position: absolute; border: 1px solid transparent; background: transparent; padding: 0; pointer-events: none; }
-    .pdf-teach .pdf-hit { cursor: pointer; pointer-events: auto; }
-    .pdf-teach .pdf-hit:hover { background: rgba(245, 185, 66, 0.35); outline: 1px solid #f5b942; }
+    .pdf-teach .pdf-page { cursor: crosshair; }
+    .pdf-teach .pdf-hit.hover { background: rgba(245, 185, 66, 0.35); outline: 1px solid #f5b942; }
     .pdf-hit.mapped { outline: 1px solid #3ecfbe; background: rgba(62, 207, 190, 0.2); }
     .pdf-hit.pick { cursor: pointer; }
     .panel-head { user-select: none; }
@@ -407,14 +407,12 @@
               <div v-if="activeDoc.kind==='pdf'" class="h-full relative bg-white">
                 <iframe v-show="!pdfClickReady" :src="pdfFrameSrc" class="absolute inset-0 w-full h-full border-0 bg-white" title="PDF preview"></iframe>
                 <div v-show="pdfClickReady" class="absolute inset-0 overflow-auto">
-                  <div v-for="page in pdfView.pages" :key="(activeDoc && activeDoc.id) + '-' + page.num" class="pdf-page mx-auto">
+                  <div v-for="page in pdfView.pages" :key="(activeDoc && activeDoc.id) + '-' + page.num" class="pdf-page mx-auto"
+                    @click="onPdfPagePointer($event, page)" @mousemove="onPdfPageMove($event, page)" @mouseleave="pdfHover=null">
                     <canvas :ref="el => renderPdfCanvas(page, el)" :width="page.width" :height="page.height"></canvas>
                     <div class="pdf-hits">
-                      <button v-for="(it, i) in page.items" :key="i" type="button" class="pdf-hit"
-                        :class="pdfHitClass(page, it)"
-                        :style="pdfItemStyle(it)"
-                        :title="it.str"
-                        @click.stop="onPdfTextClick(page, it)"></button>
+                      <div v-if="pdfHover && pdfHover.num===page.num" class="pdf-hit hover pick" :style="pdfItemStyle(pdfHover)"></div>
+                      <div v-for="m in mappedHitsForPage(page)" :key="m.id" class="pdf-hit mapped" :style="pdfItemStyle(m)"></div>
                     </div>
                   </div>
                 </div>
@@ -1338,6 +1336,19 @@
     const UNDOCK_SESSION = 'forgegrid.undocked.v1';
     const { createApp, markRaw } = window.Vue || {};
     const asRaw = typeof markRaw === 'function' ? markRaw : function (v) { return v; };
+    const pdfParseCache = Object.create(null);
+    const pdfParseWait = Object.create(null);
+    const pdfGfx = Object.create(null);
+    function pdfDocKey(doc) {
+      return (doc && (doc.id || doc.url || doc.name)) || '';
+    }
+    function forgetPdfCache(key) {
+      if (!key) return;
+      delete pdfParseCache[key];
+      Object.keys(pdfGfx).forEach((k) => {
+        if (k.indexOf(key + ':') === 0) delete pdfGfx[k];
+      });
+    }
 
     const COLUMN_TYPES = [
       { id: 'text', label: 'Text' },
@@ -2934,6 +2945,27 @@
       return left[0] ? String(left[0].str).replace(/\s+/g, ' ').trim() : '';
     }
 
+    function pdfNormPoint(ev, el) {
+      const rect = el.getBoundingClientRect();
+      const w = rect.width || 1;
+      const h = rect.height || 1;
+      return {
+        nx: Math.max(0, Math.min(1, (ev.clientX - rect.left) / w)),
+        ny: Math.max(0, Math.min(1, (ev.clientY - rect.top) / h))
+      };
+    }
+
+    function pdfItemAt(items, nx, ny) {
+      let inside = null;
+      let area = 9e9;
+      (items || []).forEach((it) => {
+        if (nx < it.nx || ny < it.ny || nx > it.nx + it.nw || ny > it.ny + it.nh) return;
+        const a = it.nw * it.nh;
+        if (a < area) { area = a; inside = it; }
+      });
+      return inside || nearestPdfItem(items, nx, ny, 0.06, 0.025);
+    }
+
     function nearestPdfItem(items, nx, ny, maxX, maxY) {
       let best = null;
       let bestD = 99;
@@ -3810,7 +3842,8 @@
           recipeHint: '',
           recipePreview: '',
           recipeTeach: { active: false, colId: '', line: false },
-          pdfView: { pages: [], src: '', error: '' }
+          pdfView: { pages: [], src: '', error: '' },
+          pdfHover: null
         };
       },
       computed: {
@@ -4154,8 +4187,11 @@
         activeDoc(doc) {
           if (doc && doc.kind === 'image') this.hydratePreview(doc);
           if (doc && doc.kind === 'pdf' && this.recipeTeach.active) {
-            setTimeout(() => this.loadPdfView(doc), 250);
-          } else if (!(doc && doc.kind === 'pdf')) this.pdfView = { pages: [], src: '', error: '' };
+            this.ensurePdfTeachView(doc);
+          } else if (!(doc && doc.kind === 'pdf')) {
+            this.pdfView = { pages: [], src: '', error: '' };
+            this.pdfHover = null;
+          }
           this.sendUndockPdf();
         },
         recipeTeach: {
@@ -4163,7 +4199,8 @@
           handler(v) {
             if (this._remoteTeach) return;
             this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, line: v.line } });
-            if (v && v.active && this.activeDoc && this.activeDoc.kind === 'pdf') setTimeout(() => this.loadPdfView(this.activeDoc), 250);
+            if (v && v.active && this.activeDoc && this.activeDoc.kind === 'pdf') this.ensurePdfTeachView(this.activeDoc);
+            if (!(v && v.active)) this.pdfHover = null;
           }
         },
         docsPaneVisible(v) {
@@ -6984,7 +7021,7 @@
             this.toast('Open the PDF first (Docs → Open file), then pick a column and click it on the page.');
           } else {
             this.recipeHint = 'Pick a column in the gold bar, then click that value on the PDF.';
-            this.loadPdfView(this.activeDoc);
+            this.ensurePdfTeachView(this.activeDoc);
           }
         },
         stopRecipeTeach() {
@@ -7016,10 +7053,28 @@
             height: Math.max(it.nh * 100, 0.8) + '%'
           };
         },
-        pdfHitClass(page, it) {
+        mappedHitsForPage(page) {
           const maps = (this.recipeDraft && this.recipeDraft.maps) || [];
-          const mapped = maps.some((m) => m.page === page.num && Math.abs(m.nx - it.nx) < 0.008 && Math.abs(m.ny - it.ny) < 0.008);
-          return { mapped, pick: this.recipeTeach.active && !!this.recipeTeach.colId };
+          return maps.filter((m) => m.page === page.num);
+        },
+        onPdfPageMove(ev, page) {
+          if (!this.recipeTeach.active) return;
+          const pt = pdfNormPoint(ev, ev.currentTarget);
+          const hit = pdfItemAt(page.items, pt.nx, pt.ny);
+          if (!hit) {
+            if (this.pdfHover) this.pdfHover = null;
+            return;
+          }
+          const cur = this.pdfHover;
+          if (cur && cur.num === page.num && cur.nx === hit.nx && cur.ny === hit.ny && cur.str === hit.str) return;
+          this.pdfHover = { num: page.num, str: hit.str, nx: hit.nx, ny: hit.ny, nw: hit.nw, nh: hit.nh };
+        },
+        onPdfPagePointer(ev, page) {
+          if (!this.recipeTeach.active) return;
+          const pt = pdfNormPoint(ev, ev.currentTarget);
+          const hit = pdfItemAt(page.items, pt.nx, pt.ny);
+          if (!hit) return this.toast('Click closer to the word you want to map.', 'warn');
+          this.onPdfTextClick(page, hit);
         },
         onPdfTextClick(page, it, extra) {
           extra = extra || {};
@@ -7097,69 +7152,90 @@
         },
         async parsePdfPages(doc) {
           if (!doc || !window.pdfjsLib) return [];
-          if (doc._pdfPages && doc._pdfPages.length) return doc._pdfPages;
-          await yieldUi();
-          const pdf = doc.url
-            ? await openPdfDocument({ url: doc.url })
-            : await openPdfDocument({ data: await this.pdfBytes(doc) });
-          const pages = [];
-          for (let p = 1; p <= pdf.numPages; p++) {
+          const key = pdfDocKey(doc);
+          if (key && pdfParseCache[key] && pdfParseCache[key].length) return pdfParseCache[key];
+          if (key && pdfParseWait[key]) return pdfParseWait[key];
+          const work = (async () => {
             await yieldUi();
-            const page = asRaw(await pdf.getPage(p));
-            const viewport = asRaw(page.getViewport({ scale: 1.35 }));
-            const content = await page.getTextContent();
-            const mapped = content.items.filter((it) => it.str && String(it.str).trim()).map((it) => {
-              const r = pdfItemRect(it, viewport);
-              return sanitizePdfItem({
-                str: it.str,
-                nx: r.x / viewport.width,
-                ny: r.y / viewport.height,
-                nw: r.w / viewport.width,
-                nh: r.h / viewport.height
+            const pdf = doc.url
+              ? await openPdfDocument({ url: doc.url })
+              : await openPdfDocument({ data: await this.pdfBytes(doc) });
+            const pages = [];
+            for (let p = 1; p <= pdf.numPages; p++) {
+              await yieldUi();
+              const page = asRaw(await pdf.getPage(p));
+              const viewport = asRaw(page.getViewport({ scale: 1.35 }));
+              const content = await page.getTextContent();
+              const mapped = content.items.filter((it) => it.str && String(it.str).trim()).map((it) => {
+                const r = pdfItemRect(it, viewport);
+                return sanitizePdfItem({
+                  str: it.str,
+                  nx: r.x / viewport.width,
+                  ny: r.y / viewport.height,
+                  nw: r.w / viewport.width,
+                  nh: r.h / viewport.height
+                });
               });
-            });
-            const items = explodePdfWords(mapped);
-            pages.push({ num: p, width: viewport.width, height: viewport.height, items, viewport, page });
+              const items = asRaw(explodePdfWords(mapped));
+              const rec = asRaw({ num: p, width: viewport.width, height: viewport.height, items });
+              pdfGfx[key + ':' + p] = asRaw({ page, viewport, canvas: null, drawn: false, paint: 0, renderTask: null });
+              pages.push(rec);
+            }
+            const frozen = asRaw(pages);
+            if (key) pdfParseCache[key] = frozen;
+            return frozen;
+          })();
+          if (key) pdfParseWait[key] = work;
+          try {
+            return await work;
+          } finally {
+            if (key) delete pdfParseWait[key];
           }
-          doc._pdfPages = pages;
-          return pages;
+        },
+        ensurePdfTeachView(doc) {
+          if (!doc || doc.kind !== 'pdf') return;
+          const key = pdfDocKey(doc);
+          if (this.pdfView.src === key && this.pdfView.pages && this.pdfView.pages.length) return;
+          setTimeout(() => this.loadPdfView(doc), 250);
         },
         async loadPdfView(doc) {
           if (!doc) return;
           this._pdfLoad = (this._pdfLoad || 0) + 1;
           const token = this._pdfLoad;
-          const key = doc.id || doc.url || '';
+          const key = pdfDocKey(doc);
+          if (this.pdfView.src === key && this.pdfView.pages && this.pdfView.pages.length) return;
           try {
             if (!doc.url && doc.file) doc.url = URL.createObjectURL(doc.file);
             const pages = await this.parsePdfPages(doc);
             if (token !== this._pdfLoad) return;
-            this.pdfView = { pages, src: key, error: '' };
+            this.pdfView = asRaw({ pages, src: key, error: '' });
           } catch (e) {
             if (token !== this._pdfLoad) return;
             this.pdfView = { pages: [], src: key, error: 'Could not parse this PDF. The preview below is the browser viewer.' };
           }
         },
         renderPdfCanvas(pg, canvas) {
-          if (!canvas || !pg || !pg.page) return;
-          if (pg._canvas === canvas && pg._drawn) return;
-          pg._canvas = canvas;
-          pg._drawn = false;
+          if (!canvas || !pg) return;
+          const gfx = pdfGfx[pdfDocKey(this.activeDoc) + ':' + pg.num];
+          if (!gfx || !gfx.page) return;
+          if (gfx.canvas === canvas && (gfx.drawn || gfx.renderTask)) return;
+          gfx.canvas = canvas;
           if (canvas.width !== pg.width) canvas.width = pg.width;
           if (canvas.height !== pg.height) canvas.height = pg.height;
           const ctx = canvas.getContext('2d');
           ctx.fillStyle = '#fff';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
-          const token = (pg._paint = (pg._paint || 0) + 1);
-          if (pg._renderTask) {
-            try { pg._renderTask.cancel(); } catch (e) {}
+          const token = (gfx.paint = (gfx.paint || 0) + 1);
+          if (gfx.renderTask) {
+            try { gfx.renderTask.cancel(); } catch (e) {}
           }
-          const task = pg.page.render({ canvasContext: ctx, viewport: pg.viewport });
-          pg._renderTask = task;
+          const task = gfx.page.render({ canvasContext: ctx, viewport: gfx.viewport });
+          gfx.renderTask = task;
           task.promise.then(() => {
-            if (token === pg._paint) pg._drawn = true;
+            if (token === gfx.paint) gfx.drawn = true;
           }).catch((e) => {
             if (e && e.name === 'RenderingCancelledException') return;
-            pg._drawn = false;
+            gfx.drawn = false;
           });
         },
         paintPdfCanvases() {
@@ -7350,13 +7426,14 @@
           opts = opts || {};
           try {
             if (!doc.text) doc.text = await this.readDocText(doc);
-            let mapPages = this.pdfView.pages;
+            let mapPages = [];
             if (doc.kind === 'pdf') {
               mapPages = await this.parsePdfPages(doc);
-              if (this.docsPaneVisible && this.activeDoc && (this.activeDoc.id === doc.id || this.activeDoc.attachId && doc.attachId && this.activeDoc.attachId === doc.attachId)) {
-                this.pdfView = { pages: mapPages, src: doc.id || doc.url };
-                await this.$nextTick();
+              if (this.recipeTeach.active && this.docsPaneVisible && this.activeDoc && (this.activeDoc.id === doc.id || this.activeDoc.attachId && doc.attachId && this.activeDoc.attachId === doc.attachId)) {
+                this.ensurePdfTeachView(doc);
               }
+            } else {
+              mapPages = this.pdfView.pages || [];
             }
             const extracted = runRecipeExtract(doc.text, recipe);
             const click = (recipe.maps || []).length && mapPages && mapPages.length ? extractFromMaps(mapPages, recipe) : { header: {}, lines: [] };
@@ -7473,9 +7550,14 @@
         },
         removeDoc(id) {
           const d = this.docs.find((x) => x.id === id);
+          if (d) forgetPdfCache(pdfDocKey(d));
           if (d && d.url) URL.revokeObjectURL(d.url);
           this.docs = this.docs.filter((x) => x.id !== id);
           if (this.activeDocId === id) this.activeDocId = this.docs[0] && this.docs[0].id;
+          if (this.pdfView.src && d && (this.pdfView.src === d.id || this.pdfView.src === d.url)) {
+            this.pdfView = { pages: [], src: '', error: '' };
+            this.pdfHover = null;
+          }
         },
         startResize(e) {
           this.resizing = true;
