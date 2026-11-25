@@ -1015,10 +1015,11 @@
                   </label>
                   <label class="text-[11px] text-mute">Match this PDF value to
                     <select v-model="m.lookup.matchColumnId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
-                      <option value="">—</option>
+                      <option value="">any column (SKU, name…)</option>
                       <option v-for="c in lookupColumns(m.lookup.tableId)" :key="c.id" :value="c.id">{{ c.name }}</option>
                     </select>
                   </label>
+                  <p v-if="lookupMatchHint(m)" class="sm:col-span-2 text-[11px] text-gold">{{ lookupMatchHint(m) }}</p>
                   <label class="text-[11px] text-mute">How to match
                     <select v-model="m.lookup.match" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
                       <option value="contains">contains (REMA ≈ REMA Grønt)</option>
@@ -2659,7 +2660,7 @@
       if (isLinkCol(col)) return findTable(store, col.link && col.link.tableId);
       const n = String(col.name || '').toLowerCase();
       const tables = store.tables || [];
-      if (/product|sku|item|vare/.test(n) && !/qty|qty|antal/.test(n)) return tables.find((t) => /product|vare/i.test(t.name)) || null;
+      if (/product|sku|item|vare/.test(n) && !/qty|antal/.test(n)) return tables.find((t) => /product|vare/i.test(t.name)) || null;
       if (/customer|kunde|client/.test(n) && !/ref|po|ordre|order/.test(n)) return tables.find((t) => /customer|kunde/i.test(t.name)) || null;
       return null;
     }
@@ -2670,20 +2671,31 @@
       return col ? formatDisplay(store, table, rec, col) : '';
     }
 
+    function skuLikeColumns(table) {
+      return ((table && table.columns) || []).filter((c) => {
+        const n = c.name || '';
+        if (/name|navn|title/i.test(n) && !/cod|sku|ean/i.test(n)) return false;
+        return /sku|item\s*no|item\s*#|varenr|ean|barcode|product\s*cod|customer\s*product|product\s*id|^code$/i.test(n);
+      });
+    }
+
+    function rowMatchesLookupCol(store, table, rec, col, needle, mode) {
+      if (!col) return false;
+      const shown = formatDisplay(store, table, rec, col);
+      const stored = rawStored(rec, col);
+      return recipeTextMatch(needle, shown, mode) || recipeTextMatch(needle, stored, mode) || valuesEqualNeedle(needle, shown, stored);
+    }
+
     function findRecipeLookupRow(store, field, raw) {
       if (!field || (field.fill && field.fill !== 'lookup') || !field.lookup || !field.lookup.tableId) return null;
       const table = findTable(store, field.lookup.tableId);
       if (!table) return null;
       const needle = String(raw == null ? '' : raw).trim();
-      const matchCol = findColumn(table, field.lookup.matchColumnId);
+      if (!needle) return null;
       const mode = field.lookup.match || 'contains';
+      const matchCol = findColumn(table, field.lookup.matchColumnId);
       if (matchCol) {
-        const hit = table.records.find((r) => {
-          const shown = formatDisplay(store, table, r, matchCol);
-          const stored = rawStored(r, matchCol);
-          return recipeTextMatch(needle, shown, mode) || recipeTextMatch(needle, stored, mode) || valuesEqualNeedle(needle, shown, stored);
-        });
-        if (hit) return hit;
+        return table.records.find((r) => rowMatchesLookupCol(store, table, r, matchCol, needle, mode)) || null;
       }
       return scanTableForNeedle(store, table, needle);
     }
@@ -2742,6 +2754,17 @@
       let val = resolveRecipeFill(store, field, raw);
       if (col && isLinkCol(col)) val = matchLinkedRecord(store, col, val);
       return val;
+    }
+
+    function recipeLookupFailMessage(store, col, map, raw) {
+      const needle = String(raw == null ? '' : raw).trim();
+      const table = map && map.lookup && findTable(store, map.lookup.tableId);
+      const matchCol = table && findColumn(table, map.lookup.matchColumnId);
+      if (table && matchCol) {
+        return (col && col.name ? col.name : 'Cell') + ': no row on “' + table.name + '” where “' + matchCol.name + '” is “' + needle + '”.';
+      }
+      if (table) return (col && col.name ? col.name : 'Cell') + ': no match for “' + needle + '” on “' + table.name + '”.';
+      return (col && col.name ? col.name : 'Cell') + ': no match for “' + needle + '”.';
     }
 
     function guessTransform(s) {
@@ -3943,6 +3966,9 @@
             if (this._remoteTeach) return;
             this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, line: v.line } });
           }
+        },
+        docsPaneVisible(v) {
+          if (v && this.activeDoc && this.activeDoc.kind === 'pdf') this.$nextTick(() => this.paintPdfCanvases());
         }
       },
       methods: {
@@ -6566,13 +6592,41 @@
         async readDocText(doc) {
           if (!doc) return '';
           if (doc.kind === 'text') return doc.text || (doc.file ? await doc.file.text() : '');
-          if (doc.kind === 'pdf') return this.extractPdfText(doc.url);
+          if (doc.kind === 'pdf') {
+            try {
+              const data = await this.pdfBytes(doc);
+              const pdf = await window.pdfjsLib.getDocument({ data }).promise;
+              return this.extractPdfTextFromPdf(pdf);
+            } catch (e) {
+              return this.extractPdfText(doc.url);
+            }
+          }
           if (doc.kind === 'image') return '';
           return doc.text || '';
         },
+        async pdfBytes(doc) {
+          if (doc && doc.file) return new Uint8Array(await doc.file.arrayBuffer());
+          const url = doc && doc.url;
+          if (!url) throw new Error('no pdf');
+          const res = await fetch(url);
+          if (!res.ok) throw new Error('pdf fetch');
+          return new Uint8Array(await res.arrayBuffer());
+        },
         async extractPdfText(url) {
           if (!window.pdfjsLib) throw new Error('pdf.js missing');
-          const pdf = await window.pdfjsLib.getDocument({ url, withCredentials: false }).promise;
+          let data;
+          try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('pdf fetch');
+            data = new Uint8Array(await res.arrayBuffer());
+          } catch (e) {
+            const pdf = await window.pdfjsLib.getDocument({ url, withCredentials: false }).promise;
+            return this.extractPdfTextFromPdf(pdf);
+          }
+          const pdf = await window.pdfjsLib.getDocument({ data }).promise;
+          return this.extractPdfTextFromPdf(pdf);
+        },
+        async extractPdfTextFromPdf(pdf) {
           const parts = [];
           for (let i = 1; i <= pdf.numPages; i++) {
             const page = await pdf.getPage(i);
@@ -6748,7 +6802,7 @@
           const hintTable = tableForColumnHint(this.store, mapCol);
           if (isLinkCol(mapCol) && mapCol.link) {
             const lt = findTable(this.store, mapCol.link.tableId);
-            const skuCol = lt && /^\d+$/.test(sample) && (lt.columns || []).find((c) => /sku|item\s*no|ean|varenr|code/i.test(c.name));
+            const skuCol = lt && /^\d+$/.test(sample) && skuLikeColumns(lt)[0];
             map.lookup = {
               tableId: mapCol.link.tableId,
               matchColumnId: (skuCol && skuCol.id) || mapCol.link.searchColumnId || mapCol.link.matchColumnId || mapCol.link.displayColumnId,
@@ -6758,7 +6812,7 @@
             };
             map.fill = 'lookup';
           } else if (hintTable && /product|customer|sku|item/i.test(mapCol.name || '')) {
-            const skuCol = /^\d+$/.test(sample) && (hintTable.columns || []).find((c) => /sku|item\s*no|ean|varenr|code/i.test(c.name));
+            const skuCol = /^\d+$/.test(sample) && skuLikeColumns(hintTable)[0];
             const nameCol = (hintTable.columns || []).find((c) => /name|navn/i.test(c.name));
             map.fill = 'lookup';
             map.lookup = {
@@ -6781,13 +6835,20 @@
           this.toast('Mapped ' + sample + ' → column.');
         },
         async loadPdfView(doc) {
-          if (!doc || !doc.url || !window.pdfjsLib) return;
-          if (this.pdfView.src === doc.url && this.pdfView.pages.length) return;
+          if (!doc || !window.pdfjsLib) return;
+          const key = doc.id || doc.url;
+          if (this.pdfView.src === key && this.pdfView.pages.length) {
+            await this.$nextTick();
+            await this.paintPdfCanvases();
+            return;
+          }
           this._pdfLoad = (this._pdfLoad || 0) + 1;
           const token = this._pdfLoad;
-          this.pdfView = { pages: [], src: doc.url };
+          this.pdfView = { pages: [], src: key };
           try {
-            const pdf = await window.pdfjsLib.getDocument({ url: doc.url, withCredentials: false }).promise;
+            const data = await this.pdfBytes(doc);
+            if (token !== this._pdfLoad) return;
+            const pdf = await window.pdfjsLib.getDocument({ data }).promise;
             const pages = [];
             for (let p = 1; p <= pdf.numPages; p++) {
               const page = await pdf.getPage(p);
@@ -6806,23 +6867,46 @@
               pages.push({ num: p, width: viewport.width, height: viewport.height, items, viewport, page });
             }
             if (token !== this._pdfLoad) return;
-            this.pdfView = { pages, src: doc.url };
+            this.pdfView = { pages, src: key };
             await this.$nextTick();
             if (token !== this._pdfLoad) return;
-            for (let i = 0; i < pages.length; i++) {
-              const pg = pages[i];
-              const canvas = document.getElementById('pdf-canvas-' + pg.num);
-              if (!canvas) continue;
-              const ctx = canvas.getContext('2d');
-              await pg.page.render({ canvasContext: ctx, viewport: pg.viewport }).promise;
-            }
+            await this.paintPdfCanvases();
           } catch (e) {
-            this.recipeHint = 'Could not render this PDF for clicking.';
+            this.recipeHint = 'Could not render this PDF. Try Open file again.';
+            this.toast('This PDF did not draw. Re-open the file (some uploads lose the bytes after a refresh).', 'warn');
+          }
+        },
+        async paintPdfCanvases() {
+          const pages = (this.pdfView && this.pdfView.pages) || [];
+          for (let i = 0; i < pages.length; i++) {
+            const pg = pages[i];
+            const canvas = document.getElementById('pdf-canvas-' + pg.num);
+            if (!canvas || !pg.page) continue;
+            if (canvas.width !== pg.width) canvas.width = pg.width;
+            if (canvas.height !== pg.height) canvas.height = pg.height;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            try {
+              if (pg._renderTask) pg._renderTask.cancel();
+              pg._renderTask = pg.page.render({ canvasContext: ctx, viewport: pg.viewport });
+              await pg._renderTask.promise;
+            } catch (e) {
+              if (e && e.name === 'RenderingCancelledException') continue;
+            }
           }
         },
         lookupColumns(tableId) {
           const t = findTable(this.store, tableId);
           return t ? t.columns : [];
+        },
+        lookupMatchHint(m) {
+          if (!m || !m.lookup) return '';
+          const sample = String(m.sample || '').trim();
+          if (!/^\d{3,}$/.test(sample)) return '';
+          const col = findColumn(findTable(this.store, m.lookup.tableId), m.lookup.matchColumnId);
+          if (!col || !/name|navn|title/i.test(col.name || '') || /cod|sku|ean/i.test(col.name || '')) return '';
+          return 'This mapping matches “' + col.name + '”, not the product code. 306832 will only hit if that name is 306832.';
         },
         ensureRecipeLookup(f) {
           if (!f.lookup) f.lookup = emptyRecipeLookup();
@@ -6911,6 +6995,7 @@
           }
           const url = hit.url || URL.createObjectURL(blob);
           const doc = { id: 'att-' + meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: '', file: blob };
+          if (!this.undocked.docs) this.splitOpen = true;
           this.recipeBusy = true;
           this.recipeHint = 'Reading attached file…';
           try {
@@ -6986,7 +7071,7 @@
               const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
               if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
               else if (col && raw !== '' && raw != null && (isLinkCol(col) || /product|customer|sku/i.test(col.name || ''))) {
-                this.toast(col.name + ': no match for “' + raw + '”. Add that SKU/name on Products/Customers, or set lookup on the click.', 'warn');
+                this.toast(recipeLookupFailMessage(this.store, col, map, raw), 'warn');
               }
               if (map) this.applyRecipeLookupAlso(headerTable, rec, map, raw);
             });
@@ -7307,6 +7392,10 @@
           if (resolveRecipeFill(lkWs, custF, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('customer lookup failed');
           const prodF = remR.lineFields.find((f) => f.columnId === 'col_l_prod');
           if (resolveRecipeFill(lkWs, prodF, '306832') !== 'rec_prod_snaps') console.warn('product sku lookup failed');
+          const productsT = lkWs.tables.find((x) => x.name === 'Products');
+          const prodNameCol = productsT.columns.find((c) => c.name === 'Name');
+          const nameAsKey = { fill: 'lookup', lookup: { tableId: productsT.id, matchColumnId: prodNameCol.id, match: 'equals', out: 'link' } };
+          if (resolveRecipeFill(lkWs, nameAsKey, '306832') !== '') console.warn('lookup must use the chosen Name column, not SKU');
           const fixF = remR.headerFields.find((f) => f.fill === 'fixed');
           if (resolveRecipeFill(lkWs, fixF, '') !== 'Draft') console.warn('fixed recipe fill failed');
           const ord = lkWs.tables.find((x) => x.name === 'Orders');
@@ -7316,6 +7405,16 @@
           const linesT = lkWs.tables.find((x) => x.name === 'Line Items');
           const lineProdCol = linesT.columns.find((c) => c.name === 'Product');
           if (matchLinkedRecord(lkWs, lineProdCol, '306832') !== 'rec_prod_snaps') console.warn('product SKU link match failed');
+          lkWs.tables.push({
+            id: 'tbl_packed', name: 'Packed Products', groupId: productsT.groupId, columns: [
+              { id: 'pp_name', name: 'Packed Product Name', type: 'text' },
+              { id: 'pp_code', name: 'Customer Product Code', type: 'text' }
+            ], records: [{ id: 'rec_packed_flow', createdAt: Date.now(), updatedAt: Date.now(), data: { pp_name: '125g flowbag', pp_code: '888777' } }]
+          });
+          const packedWrong = { fill: 'lookup', lookup: { tableId: productsT.id, matchColumnId: prodNameCol.id, match: 'equals', out: 'link' } };
+          if (resolveRecipeFill(lkWs, packedWrong, '888777') !== '') console.warn('must not search Packed Products when Look in sheet is Products');
+          const packedRight = { fill: 'lookup', lookup: { tableId: 'tbl_packed', matchColumnId: 'pp_code', match: 'equals', out: 'link' } };
+          if (resolveRecipeFill(lkWs, packedRight, '888777') !== 'rec_packed_flow') console.warn('chosen Packed Products + Customer Product Code should match');
           const fakeProd = { name: 'Product', type: 'text' };
           if (String(coerceRecipeCell(lkWs, fakeProd, { fill: 'pdf' }, '306832')) !== '306832') console.warn('text Product should keep the mapped SKU');
           const spec = snapshotCellRule(cust2.records[0], city2);
