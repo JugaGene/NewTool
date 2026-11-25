@@ -141,8 +141,17 @@
     .pdf-page canvas { display: block; width: 100%; height: auto; }
     .pdf-hits { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
     .pdf-hit { position: absolute; border: 1px solid transparent; background: transparent; padding: 0; pointer-events: none; }
-    .pdf-teach .pdf-page { cursor: crosshair; }
-    .pdf-teach .pdf-hit.hover { background: rgba(245, 185, 66, 0.35); outline: 1px solid #f5b942; }
+    .pdf-teach .pdf-page { cursor: crosshair; user-select: none; touch-action: none; }
+    .pdf-teach .pdf-hit.hover { background: rgba(245, 185, 66, 0.35); outline: 2px solid #f5b942; }
+    .pdf-teach .pdf-hit.marquee { background: rgba(245, 185, 66, 0.28); outline: 2px solid #f5b942; }
+    .pdf-phrase-chip {
+      position: absolute; left: 0; top: 0; z-index: 2; pointer-events: none;
+      transform: translateY(-110%);
+      max-width: 90%;
+      background: #f5b942; color: #0b1220; font-size: 12px; font-weight: 650;
+      line-height: 1.2; padding: 3px 8px; border-radius: 6px; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis;
+    }
     .pdf-hit.mapped { outline: 1px solid #3ecfbe; background: rgba(62, 207, 190, 0.2); }
     .pdf-hit.pick { cursor: pointer; }
     .panel-head { user-select: none; }
@@ -296,6 +305,7 @@
           One row per unique product
         </label>
         <span class="opacity-80">{{ teachHintText }}</span>
+        <span v-if="pdfSelectCaption" class="rounded-md bg-ink-900 text-gold px-2 py-0.5 font-mono text-[12px] max-w-[min(36rem,70vw)] truncate" :title="pdfSelectCaption">{{ pdfSelectCaption }}</span>
         <span v-if="teachLinePreview" class="w-full text-[12px] font-mono text-ink-900/90">Preview {{ teachLinePreview }}</span>
         <button v-if="!panelMode && !undocked.docs" class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="popOutPanel('docs')">Move to other monitor</button>
         <button class="ml-auto rounded-md bg-ink-900 text-gold px-2 py-1 text-[12px] font-semibold" @click="saveRecipe">Save recipe</button>
@@ -422,17 +432,23 @@
           <div class="flex-1 min-h-0 p-2" @dragover.prevent="docDrag=true" @dragleave="docDrag=false" @drop.prevent="onDrop">
             <div v-if="!activeDoc" class="h-full rounded-xl border-2 border-dashed doc-drop flex flex-col items-center justify-center text-center px-6" :class="docDrag && 'drag'">
               <div class="text-sm font-medium">Drop a PDF, screenshot, or EDI file</div>
-              <p class="text-xs text-mute mt-1 max-w-xs">Use Open file above, or drop a PDF here. To teach a recipe, open the PDF first, then Recipes → Teach on PDF, pick a column, and click the value on the page.</p>
+              <p class="text-xs text-mute mt-1 max-w-xs">Use Open file above, or drop a PDF here. To teach a recipe, open the PDF first, then Recipes → Teach on PDF, pick a column, and click a value or drag across a product name.</p>
             </div>
             <div v-else class="h-full rounded-xl border border-line bg-ink-950 overflow-hidden relative" :class="recipeTeach.active && 'pdf-teach'">
               <div v-if="activeDoc.kind==='pdf'" class="h-full relative bg-white">
                 <iframe v-show="!pdfClickReady" :src="pdfFrameSrc" class="absolute inset-0 w-full h-full border-0 bg-white" title="PDF preview"></iframe>
                 <div v-show="pdfClickReady" class="absolute inset-0 overflow-auto">
                   <div v-for="page in pdfView.pages" :key="(activeDoc && activeDoc.id) + '-' + page.num" class="pdf-page mx-auto"
-                    @click="onPdfPagePointer($event, page)" @mousemove="onPdfPageMove($event, page)" @mouseleave="pdfHover=null">
+                    @pointerdown="onPdfPageDown($event, page)" @pointermove="onPdfPageMove($event, page)"
+                    @pointerup="onPdfPageUp($event, page)" @pointercancel="clearPdfDrag" @mouseleave="onPdfPageLeave">
                     <canvas :ref="el => renderPdfCanvas(page, el)" :width="page.width" :height="page.height"></canvas>
                     <div class="pdf-hits">
-                      <div v-if="pdfHover && pdfHover.num===page.num" class="pdf-hit hover pick" :style="pdfItemStyle(pdfHover)"></div>
+                      <div v-if="pdfMarquee && pdfMarquee.num===page.num" class="pdf-hit hover pick marquee" :style="pdfItemStyle(pdfMarquee)">
+                        <div v-if="pdfSelectCaption" class="pdf-phrase-chip">{{ pdfSelectCaption }}</div>
+                      </div>
+                      <div v-else-if="pdfHover && pdfHover.num===page.num" class="pdf-hit hover pick" :style="pdfItemStyle(pdfHover)">
+                        <div v-if="pdfHover.str && /\s/.test(pdfHover.str)" class="pdf-phrase-chip">{{ pdfHover.str }}</div>
+                      </div>
                       <div v-for="m in mappedHitsForPage(page)" :key="m.id" class="pdf-hit mapped" :style="pdfItemStyle(m)"></div>
                     </div>
                   </div>
@@ -1006,7 +1022,7 @@
             </div>
             <div>
               <div class="text-sm font-medium mb-1">Clicked on the PDF</div>
-              <p class="text-[12px] text-mute mb-2">After a click, choose what to do with that value: keep the PDF text, look it up and <strong class="text-mist">link</strong> a row, copy another field from that row, or type a fixed value. For a repeating column you can click <strong class="text-mist">more product numbers on the same column</strong> (306810, then 306806, then 306805) — they stay on that one mapping as unique choices, they do not overwrite each other.</p>
+              <p class="text-[12px] text-mute mb-2">After a click or a drag, choose what to do with that value: keep the PDF text, look it up and <strong class="text-mist">link</strong> a row, copy another field from that row, or type a fixed value. Drag across a product name (<strong class="text-mist">Ærter Danske 500gr.</strong>) so the whole phrase is one mapping — customers often change SKU by sales channel, so match Products on the name, not the number. One drag teaches the description column; Fill still reads every line in that band. For a repeating number column you can still click each example (306810, then 306806).</p>
               <p v-if="!(recipeDraft.maps && recipeDraft.maps.length)" class="text-[12px] text-mute mb-2">Nothing clicked yet. Open a PDF with Docs, then Teach on PDF.</p>
               <div v-for="(m, i) in (recipeDraft.maps || [])" :key="m.id" class="rounded-lg border border-line p-2 mb-2 space-y-2 text-sm">
                 <div class="flex flex-wrap items-center gap-2">
@@ -1165,10 +1181,10 @@
                 <input type="checkbox" class="accent-teal" v-model="recipeDraft.lineUnique.enabled" :disabled="mode!=='architect'" />
                 One Line Items row per unique product number
               </label>
-              <p class="text-[11px] text-mute">Clicks teach the column, not one order. For boxes: click <strong class="text-mist">Antal kolli</strong> (56, 112) or the word <strong class="text-mist">kolli</strong> — never <strong class="text-mist">6 KG</strong> / <strong class="text-mist">10 BAK</strong> (that is pack size). On Rema click <strong class="text-mist">360 Ks.</strong> Keep Several products on. Crates ending in 15 are skipped.</p>
+              <p class="text-[11px] text-mute">Clicks and drags teach the column, not one order. Drag the product <strong class="text-mist">name</strong> when the customer’s SKU is not yours. For boxes: click <strong class="text-mist">Antal kolli</strong> (56, 112) or the word <strong class="text-mist">kolli</strong> — never <strong class="text-mist">6 KG</strong> / <strong class="text-mist">10 BAK</strong> (that is pack size). On Rema click <strong class="text-mist">360 Ks.</strong> Keep Several products on. Crates ending in 15 are skipped.</p>
               <label v-if="recipeDraft.lineUnique && recipeDraft.lineUnique.enabled" class="text-[11px] text-mute block">Unique key column
                 <select v-model="recipeDraft.lineUnique.columnId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-2 py-1 text-[12px] text-mist" :disabled="mode!=='architect'">
-                  <option value="">product number on the line</option>
+                  <option value="">product name or number on the line</option>
                   <option v-for="c in recipeLineColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
                 </select>
               </label>
@@ -3245,7 +3261,12 @@
       const tokens = (s) => s.split(/[^a-z0-9æøå]+/i).filter((t) => t.length >= 4);
       const tx = tokens(x);
       const ty = tokens(y);
-      return tx.some((t) => ty.indexOf(t) >= 0);
+      if (!tx.length || !ty.length) return false;
+      const overlap = tx.filter((t) => ty.indexOf(t) >= 0);
+      if (x.length >= 12 && y.length >= 12 && Math.min(tx.length, ty.length) >= 2) {
+        return overlap.length >= 2;
+      }
+      return overlap.length > 0;
     }
 
     function valuesEqualNeedle(needle, shown, stored) {
@@ -3377,12 +3398,38 @@
       return primary ? [primary].concat(extras) : extras;
     }
 
+    function lookupMatchScore(needle, value, mode) {
+      if (!recipeTextMatch(needle, value, mode) && !lookupValuesMatch(needle, value)) return -1;
+      const x = String(needle == null ? '' : needle).toLowerCase().trim();
+      const y = String(value == null ? '' : value).toLowerCase().trim();
+      if (x === y || lookupValuesMatch(needle, value)) return 2000 + y.length;
+      if (y.indexOf(x) >= 0 || x.indexOf(y) >= 0) return 800 + Math.min(x.length, y.length);
+      return 50;
+    }
+
+    function pickBestLookupRow(store, table, recs, col, needle, mode) {
+      let best = null;
+      let bestS = -1;
+      let ties = 0;
+      (recs || []).forEach((r) => {
+        const vals = col ? lookupCellCandidates(store, table, r, col) : [];
+        let s = -1;
+        vals.forEach((v) => { s = Math.max(s, lookupMatchScore(needle, v, mode)); });
+        if (!col && r) s = Math.max(s, lookupMatchScore(needle, JSON.stringify(r.data || {}), mode));
+        if (s < 0) return;
+        if (s > bestS) { bestS = s; best = r; ties = 1; }
+        else if (s === bestS && r !== best) ties += 1;
+      });
+      if (ties > 1 && bestS < 2000) return null;
+      return best;
+    }
+
     function findRowOnTable(store, table, field, needle) {
       if (!table || !needle) return null;
       const mode = (field && field.lookup && field.lookup.match) || 'contains';
       const matchCol = findColumn(table, field && field.lookup && field.lookup.matchColumnId);
       if (matchCol) {
-        return (table.records || []).find((r) => rowMatchesLookupCol(store, table, r, matchCol, needle, mode)) || null;
+        return pickBestLookupRow(store, table, table.records, matchCol, needle, mode);
       }
       return scanTableForNeedle(store, table, needle);
     }
@@ -3624,6 +3671,139 @@
       return String(it && it.str != null ? it.str : '').replace(/\s+/g, ' ').trim();
     }
 
+    function pdfNormBox(x0, y0, x1, y1) {
+      const nx = Math.max(0, Math.min(1, Math.min(x0, x1)));
+      const ny = Math.max(0, Math.min(1, Math.min(y0, y1)));
+      const xMax = Math.max(0, Math.min(1, Math.max(x0, x1)));
+      const yMax = Math.max(0, Math.min(1, Math.max(y0, y1)));
+      return { nx, ny, nw: Math.max(xMax - nx, 0.002), nh: Math.max(yMax - ny, 0.003) };
+    }
+
+    function unionPdfItems(items) {
+      const list = (items || []).filter(Boolean);
+      if (!list.length) return { nx: 0, ny: 0, nw: 0.01, nh: 0.01 };
+      let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+      list.forEach((it) => {
+        x0 = Math.min(x0, it.nx);
+        y0 = Math.min(y0, it.ny);
+        x1 = Math.max(x1, it.nx + it.nw);
+        y1 = Math.max(y1, it.ny + it.nh);
+      });
+      return { nx: x0, ny: y0, nw: Math.max(x1 - x0, 0.004), nh: Math.max(y1 - y0, 0.006) };
+    }
+
+    function joinPdfItemTexts(items) {
+      return (items || []).slice()
+        .sort((a, b) => (a.nx - b.nx) || (a.ny - b.ny))
+        .map(pdfItemText)
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function phraseBreakToken(it) {
+      const s = pdfItemText(it);
+      if (!s) return true;
+      if (skuLikeSample(s)) return true;
+      if (crateLineText(s)) return true;
+      if (/^(ks\.?|kolli|stk\.?|pcs\.?|antal)$/i.test(s)) return true;
+      if (isMoneySample(s)) return true;
+      if (isQtyToken(s) && !/[a-zæøå]/i.test(s)) return true;
+      return false;
+    }
+
+    function samePdfItem(a, b) {
+      if (!a || !b) return false;
+      if (a === b) return true;
+      return a.nx === b.nx && a.ny === b.ny && String(a.str) === String(b.str);
+    }
+
+    function expandPhraseRun(items, seed) {
+      if (!seed || !pdfItemText(seed)) return [];
+      if (phraseBreakToken(seed)) return [seed];
+      const y = pdfLineY(seed);
+      const line = itemsOnPdfLine(items, y, 0.018).slice().sort((a, b) => a.nx - b.nx);
+      let idx = line.findIndex((it) => samePdfItem(it, seed));
+      if (idx < 0) {
+        idx = line.findIndex((it) => Math.abs((it.nx + it.nw / 2) - (seed.nx + seed.nw / 2)) < 0.01);
+      }
+      if (idx < 0) return [seed];
+      const gap = 0.034;
+      let lo = idx;
+      let hi = idx;
+      while (lo > 0) {
+        const left = line[lo - 1];
+        if (phraseBreakToken(left)) break;
+        if (line[lo].nx - (left.nx + left.nw) > gap) break;
+        lo -= 1;
+      }
+      while (hi < line.length - 1) {
+        const right = line[hi + 1];
+        if (phraseBreakToken(right)) break;
+        if (right.nx - (line[hi].nx + line[hi].nw) > gap) break;
+        hi += 1;
+      }
+      return line.slice(lo, hi + 1);
+    }
+
+    function sweepPhraseOnLine(items, y, x0, x1) {
+      const left = Math.min(x0, x1);
+      const right = Math.max(x0, x1);
+      const pad = 0.012;
+      return itemsOnPdfLine(items, y, 0.02).slice().sort((a, b) => a.nx - b.nx).filter((it) => {
+        if (!pdfItemText(it) || phraseBreakToken(it)) return false;
+        const il = it.nx;
+        const ir = it.nx + it.nw;
+        const cx = (il + ir) / 2;
+        return cx >= left - pad && cx <= right + pad || (il < right && ir > left);
+      });
+    }
+
+    function phraseHitFromItems(picked) {
+      const list = (picked || []).filter(Boolean);
+      if (!list.length) return null;
+      const uni = unionPdfItems(list);
+      return Object.assign({ str: joinPdfItemTexts(list) }, uni);
+    }
+
+    function itemsOverlappingBox(items, box) {
+      const b = box || {};
+      const region = { nx: b.nx, ny: b.ny, nw: Math.max(b.nw || 0, 0.004), nh: Math.max(b.nh || 0, 0.006) };
+      return (items || []).filter((it) => pdfItemText(it) && pdfRectOverlap(region, it) > 0)
+        .sort((a, b) => (a.nx - b.nx) || (a.ny - b.ny));
+    }
+
+    function mapIsPhrase(map) {
+      if (!map) return false;
+      if (map.phrase) return true;
+      const s = String(map.sample || '').replace(/\s+/g, ' ').trim();
+      if (!s || skuLikeSample(s)) return false;
+      return /\s/.test(s);
+    }
+
+    function itemOverlapsXBand(it, map, pad) {
+      if (!it || !map) return false;
+      const p = pad == null ? 0.01 : pad;
+      const left = (map.nx || 0) - p;
+      const right = (map.nx || 0) + (map.nw || 0) + p;
+      return it.nx < right && (it.nx + it.nw) > left;
+    }
+
+    function readPhraseOnLine(items, map, y) {
+      const tol = Math.max((map && map.nh) || 0.012, 0.012) * 1.6;
+      const picked = (items || []).filter((it) => {
+        if (!pdfItemText(it)) return false;
+        if (Math.abs((it.ny + it.nh / 2) - y) > tol) return false;
+        return itemOverlapsXBand(it, map);
+      });
+      return joinPdfItemTexts(picked);
+    }
+
+    function crateLineText(s) {
+      return /europool|kasse|emballage/i.test(String(s || ''));
+    }
+
     function pdfRectOverlap(a, b) {
       const x = Math.max(0, Math.min(a.nx + a.nw, b.nx + b.nw) - Math.max(a.nx, b.nx));
       const y = Math.max(0, Math.min(a.ny + a.nh, b.ny + b.nh) - Math.max(a.ny, b.ny));
@@ -3663,6 +3843,10 @@
         const s = score(it);
         if (s > bestS) { bestS = s; best = it; }
       });
+      if (mapIsPhrase(map)) {
+        const phrase = readPhraseOnLine(items, map, cy) || joinPdfItemTexts(itemsOverlappingBox(items, box));
+        if (phrase) return phrase;
+      }
       if (best && pdfItemText(best)) return pdfItemText(best);
       if (sample) {
         const same = items.filter((it) => pdfItemText(it) === sample);
@@ -3675,30 +3859,36 @@
     function extractFromMaps(pages, recipe) {
       const maps = recipe.maps || [];
       const skuLine = maps.some((m) => m.role === 'line' && (skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample))));
+      const phraseLine = maps.some((m) => m.role === 'line' && mapIsPhrase(m));
+      const repeatingLines = skuLine || phraseLine;
       const header = {};
       maps.filter((m) => m.role !== 'line').forEach((m) => {
-        if (skuLine && isQtyLikeMap(m)) return;
+        if (repeatingLines && isQtyLikeMap(m)) return;
         header[m.columnId] = recipeMapValue(m, readClickMap(pages, m));
       });
       let lineMaps = maps.filter((m) => m.role === 'line');
-      if (skuLine) {
+      if (repeatingLines) {
         maps.filter((m) => m.role !== 'line' && isQtyLikeMap(m)).forEach((m) => {
           if (!lineMaps.some((x) => x.columnId === m.columnId)) lineMaps = lineMaps.concat([m]);
         });
       }
       const lines = [];
       if (lineMaps.length) {
+        const phraseMap = lineMaps.find((m) => mapIsPhrase(m));
         const skuMap = lineMaps.find((m) => skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample)));
-        const m0 = skuMap || lineMaps[0];
+        const m0 = phraseMap || skuMap || lineMaps[0];
         const page = pages[(m0.page || 1) - 1];
         const items = (page && page.items) || [];
         const cx0 = m0.nx + m0.nw / 2;
         const sample = String(m0.sample || '').trim();
-        const skuAnchor = skuLikeSample(sample) || (m0.choices || []).some((c) => skuLikeSample(c.sample));
-        let hits = items.filter((it) => Math.abs((it.nx + it.nw / 2) - cx0) < 0.08 && String(it.str).trim());
+        const skuAnchor = !phraseMap && (skuLikeSample(sample) || (m0.choices || []).some((c) => skuLikeSample(c.sample)));
+        const phraseAnchor = mapIsPhrase(m0);
+        let hits = phraseAnchor
+          ? items.filter((it) => itemOverlapsXBand(it, m0) && pdfItemText(it) && !skuLikeSample(it.str))
+          : items.filter((it) => Math.abs((it.nx + it.nw / 2) - cx0) < 0.08 && String(it.str).trim());
         if (skuAnchor) hits = hits.filter((it) => skuLikeSample(it.str));
         hits = hits.filter((it) => !skuBlockedByHeader(header, it.str));
-        if (skuAnchor && hits.length > 1) hits = densestSkuHits(hits);
+        if ((skuAnchor || phraseAnchor) && hits.length > 1) hits = densestSkuHits(hits);
         const clusters = [];
         hits.map((it) => it.ny + it.nh / 2).sort((a, b) => a - b).forEach((y) => {
           const last = clusters[clusters.length - 1];
@@ -3712,9 +3902,9 @@
           let filled = 0;
           lineMaps.forEach((m) => {
             let raw = '';
-            if (isQtyLikeMap(m)) {
-              raw = readQtyOnLine(items, m, c.y) || crateQtyBelow(items, m, c.y);
-            } else {
+            if (mapIsPhrase(m)) raw = readPhraseOnLine(items, m, c.y);
+            else if (isQtyLikeMap(m)) raw = readQtyOnLine(items, m, c.y) || crateQtyBelow(items, m, c.y);
+            else {
               const it = nearestPdfItem(items, m.nx + m.nw / 2, c.y, 0.045, 0.012);
               raw = it ? it.str : '';
             }
@@ -3728,7 +3918,7 @@
           if (!filled) return;
           const extras = itemsOnPdfLine(items, c.y).map((it) => it.str);
           if (recipeLineSkipped(recipe, row, extras)) return;
-          if (extras.some((s) => /europool|kasse|kolli|emballage/i.test(String(s || '')))) return;
+          if (extras.some((s) => crateLineText(s)) || Object.keys(row).some((k) => crateLineText(row[k]))) return;
           const sku = skuValueFromLineRow(row);
           if (sku && /15$/.test(String(sku).replace(/\s/g, ''))) return;
           if (skuBlockedByHeader(header, sku)) return;
@@ -4530,7 +4720,9 @@
           recipePreview: '',
           recipeTeach: { active: false, colId: '', pick: '', line: false },
           pdfView: { pages: [], src: '', error: '' },
-          pdfHover: null
+          pdfHover: null,
+          pdfDrag: null,
+          pdfRangeAnchor: null
         };
       },
       computed: {
@@ -4861,6 +5053,28 @@
           if (this.panelMode) return false;
           return !this.undocked.recipes;
         },
+        pdfMarquee() {
+          const d = this.pdfDrag;
+          if (!d) return null;
+          if (d.picked && d.picked.length) return Object.assign({ num: d.page }, unionPdfItems(d.picked));
+          return Object.assign({ num: d.page }, pdfNormBox(d.x0, d.y0, d.x1, d.y1));
+        },
+        pdfSelectCaption() {
+          const d = this.pdfDrag;
+          if (d && d.picked && d.picked.length) return joinPdfItemTexts(d.picked);
+          if (this.pdfHover && this.pdfHover.str && /\s/.test(this.pdfHover.str)) return this.pdfHover.str;
+          return '';
+        },
+        teachWantPhrase() {
+          if (!this.recipeTeach.active || !this.recipeTeach.colId) return false;
+          const pick = String(this.recipeTeach.pick || '');
+          const role = pick.indexOf(':') >= 0 ? pick.slice(0, pick.indexOf(':')) : '';
+          const col = this.teachColumns.find((c) => c.id === this.recipeTeach.colId && (!c.teachRole || c.teachRole === role || !role))
+            || this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
+          if (col && qtyLikeColumn(col)) return false;
+          if (this.recipeTeach.line) return true;
+          return !!(col && /product|name|navn|beskriv|vare|item/i.test(col.name || ''));
+        },
         teachHintText() {
           const pick = String(this.recipeTeach.pick || '');
           const role = pick.indexOf(':') >= 0 ? pick.slice(0, pick.indexOf(':')) : '';
@@ -4870,14 +5084,14 @@
             return 'Click Antal kolli (56 / 112) or the header word “kolli”. Do not click 6 KG or 10 BAK — that is pack size. On Rema click 360 Ks. If you click pack size, ForgeGrid snaps to the box column.';
           }
           if (this.recipeTeach.colId && this.recipeTeach.line) {
-            return 'Keep this column selected. Click every product number in that PDF column (306810, 306806, 306805). Extra clicks add unique lines — they do not replace. Skip numbers ending in 15.';
+            return 'Click any word in the product name — the rest of the phrase on that line is selected (Ærter Danske 500gr.). Drag left/right on the line to trim. Qty and price are still a single click.';
           }
           if (this.recipeTeach.colId) {
             return this.undocked.docs || this.panelMode === 'docs'
-              ? 'Now click that value on the PDF window.'
-              : 'Now click that value on the PDF at the left.';
+              ? 'Click the value (or any word in a name — the full phrase is taken).'
+              : 'Click the value on the PDF (or any word in a name — the full phrase is taken).';
           }
-          return 'Pick Line Items · Item No, then click each unique product number on the PDF.';
+          return 'Pick Line Items · Product, then click any word in the product name on the PDF.';
         },
         teachLinePreview() {
           if (!this.recipeTeach.active) return '';
@@ -4920,7 +5134,7 @@
             if (this._remoteTeach) return;
             this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, pick: v.pick, line: v.line } });
             if (v && v.active && this.activeDoc && this.activeDoc.kind === 'pdf') this.ensurePdfTeachView(this.activeDoc);
-            if (!(v && v.active)) this.pdfHover = null;
+            if (!(v && v.active)) { this.pdfHover = null; this.pdfDrag = null; this.pdfRangeAnchor = null; }
           }
         },
         docsPaneVisible(v) {
@@ -7558,7 +7772,7 @@
           const it = msg.item;
           const page = { num: msg.pageNum, items: msg.items || [] };
           if (!it) return;
-          this.onPdfTextClick(page, it, { fromPopout: true, label: msg.label });
+          this.onPdfTextClick(page, it, { fromPopout: true, label: msg.label, phrase: !!msg.phrase });
         },
         initUndock() {
           try {
@@ -7914,9 +8128,9 @@
             this.recipeTeach.line = true;
             const lt = ensureRecipeLineTable(this.store, this.recipeDraft);
             if (lt) { this.currentTableId = lt.id; this.currentGroupId = lt.groupId; }
-            this.recipeHint = 'Several products is on. One click teaches the Nummer column. Other PDFs can list different products — Fill takes every unique number (skip *15).';
+            this.recipeHint = 'Several products is on. Drag the product name (not the customer SKU) to teach that column. Other PDFs can list different names — Fill takes every unique phrase in that band.';
           } else if (col) {
-            this.recipeHint = 'Click “' + col.name + '” on the PDF (once for the whole order). Leave Several products on if you will map SKUs next.';
+            this.recipeHint = 'Click or drag “' + col.name + '” on the PDF (once for the whole order). Leave Several products on to map repeating product names.';
           }
         },
         onTeachLineToggle() {
@@ -7929,7 +8143,7 @@
             this.currentGroupId = lt.groupId;
             this.saveRecipe();
           } else {
-            this.toast('Add a Line Items sheet (or set Line-item sheet on the recipe). Several products stays on so SKU clicks can stack.');
+            this.toast('Add a Line Items sheet (or set Line-item sheet on the recipe). Several products stays on so product-name drags can stack.');
           }
         },
         pdfItemStyle(it) {
@@ -7952,7 +8166,7 @@
                 if (!skuLikeSample(it.str)) return;
                 const y = pdfLineY(it);
                 const extras = itemsOnPdfLine(page.items, y).map((t) => t.str);
-                if (extras.some((s) => /europool|kasse|emballage/i.test(String(s || '')))) return;
+                if (extras.some((s) => crateLineText(s))) return;
                 const q = qtyItemAtColumn(page.items, cx, y);
                 if (!q) return;
                 const key = String(q.ny.toFixed(3)) + ':' + String(q.str);
@@ -7962,8 +8176,24 @@
               });
               return;
             }
-            const openCol = m.role === 'line' && (skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c && c.sample)));
-            if (openCol && page && page.items) {
+            const openSku = m.role === 'line' && (skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c && c.sample)));
+            const openPhrase = m.role === 'line' && mapIsPhrase(m);
+            if (openPhrase && page && page.items) {
+              const seen = {};
+              page.items.forEach((it) => {
+                if (!itemOverlapsXBand(it, m) || !pdfItemText(it) || skuLikeSample(it.str)) return;
+                const y = Math.round((it.ny + it.nh / 2) * 1000);
+                if (seen[y]) return;
+                seen[y] = true;
+                const phrase = readPhraseOnLine(page.items, m, it.ny + it.nh / 2);
+                if (!phrase || crateLineText(phrase)) return;
+                const picked = page.items.filter((x) => itemOverlapsXBand(x, m) && Math.abs((x.ny + x.nh / 2) - (it.ny + it.nh / 2)) < 0.012);
+                const box = unionPdfItems(picked.length ? picked : [it]);
+                out.push({ id: m.id + '-p' + y, nx: box.nx, ny: box.ny, nw: box.nw, nh: box.nh });
+              });
+              return;
+            }
+            if (openSku && page && page.items) {
               const cx = m.nx + (m.nw || 0) / 2;
               const seen = {};
               page.items.forEach((it) => {
@@ -7984,30 +8214,120 @@
           });
           return out;
         },
+        clearPdfDrag() {
+          this.pdfDrag = null;
+        },
+        onPdfPageLeave() {
+          if (!this.pdfDrag) this.pdfHover = null;
+        },
+        pdfWordAt(page, nx, ny) {
+          return pdfItemAt(page.items, nx, ny) || nearestPdfItem(page.items, nx, ny, 0.12, 0.04);
+        },
+        previewPhraseHover(page, hit) {
+          if (!hit) {
+            this.pdfHover = null;
+            return;
+          }
+          let box = hit;
+          if (this.teachWantPhrase && !phraseBreakToken(hit)) {
+            const run = expandPhraseRun(page.items, hit);
+            const joined = phraseHitFromItems(run);
+            if (joined && run.length > 1) box = joined;
+          }
+          const cur = this.pdfHover;
+          if (cur && cur.num === page.num && cur.str === box.str && cur.nx === box.nx && cur.nw === box.nw) return;
+          this.pdfHover = { num: page.num, str: box.str, nx: box.nx, ny: box.ny, nw: box.nw, nh: box.nh };
+        },
+        commitPhraseItems(page, picked, extra) {
+          const hit = phraseHitFromItems(picked);
+          if (!hit || !hit.str) return this.toast('Move a little along the name until the gold highlight covers it.', 'warn');
+          this.onPdfTextClick(page, hit, Object.assign({ phrase: picked.length > 1 || /\s/.test(hit.str) }, extra || {}));
+        },
+        onPdfPageDown(ev, page) {
+          if (!this.recipeTeach.active) return;
+          if (ev.button != null && ev.button !== 0) return;
+          ev.preventDefault();
+          const pt = pdfNormPoint(ev, ev.currentTarget);
+          const seed = this.pdfWordAt(page, pt.nx, pt.ny);
+          const y = seed ? pdfLineY(seed) : pt.ny;
+          const x = seed ? seed.nx + seed.nw / 2 : pt.nx;
+          this.pdfDrag = {
+            page: page.num,
+            x0: x,
+            y0: y,
+            x1: x,
+            y1: y,
+            yLock: y,
+            moved: false,
+            picked: seed && !phraseBreakToken(seed) ? expandPhraseRun(page.items, seed) : (seed ? [seed] : [])
+          };
+          this.pdfHover = null;
+          try { ev.currentTarget.setPointerCapture(ev.pointerId); } catch (e) {}
+        },
         onPdfPageMove(ev, page) {
           if (!this.recipeTeach.active) return;
           const pt = pdfNormPoint(ev, ev.currentTarget);
-          const hit = pdfItemAt(page.items, pt.nx, pt.ny);
+          if (this.pdfDrag && this.pdfDrag.page === page.num) {
+            this.pdfDrag.x1 = pt.nx;
+            this.pdfDrag.y1 = this.pdfDrag.yLock;
+            const dx = Math.abs(this.pdfDrag.x1 - this.pdfDrag.x0);
+            if (dx > 0.012) {
+              this.pdfDrag.moved = true;
+              this.pdfDrag.picked = sweepPhraseOnLine(page.items, this.pdfDrag.yLock, this.pdfDrag.x0, this.pdfDrag.x1);
+            }
+            return;
+          }
+          const hit = this.pdfWordAt(page, pt.nx, pt.ny);
           if (!hit) {
             if (this.pdfHover) this.pdfHover = null;
             return;
           }
-          const cur = this.pdfHover;
-          if (cur && cur.num === page.num && cur.nx === hit.nx && cur.ny === hit.ny && cur.str === hit.str) return;
-          this.pdfHover = { num: page.num, str: hit.str, nx: hit.nx, ny: hit.ny, nw: hit.nw, nh: hit.nh };
+          this.previewPhraseHover(page, hit);
         },
-        onPdfPagePointer(ev, page) {
+        onPdfPageUp(ev, page) {
           if (!this.recipeTeach.active) return;
+          const drag = this.pdfDrag;
+          this.pdfDrag = null;
           const pt = pdfNormPoint(ev, ev.currentTarget);
-          const hit = pdfItemAt(page.items, pt.nx, pt.ny);
-          if (!hit) return this.toast('Click closer to the word you want to map.', 'warn');
-          this.onPdfTextClick(page, hit);
+          const word = this.pdfWordAt(page, pt.nx, pt.ny);
+          if (drag && drag.moved) {
+            const picked = (drag.picked && drag.picked.length)
+              ? drag.picked
+              : sweepPhraseOnLine(page.items, drag.yLock, drag.x0, pt.nx);
+            this.commitPhraseItems(page, picked);
+            return;
+          }
+          if (!word) return this.toast('Click a word in the name (the gold highlight shows what will be taken).', 'warn');
+          if (ev.shiftKey && this.pdfRangeAnchor && this.pdfRangeAnchor.page === page.num) {
+            const y = pdfLineY(this.pdfRangeAnchor);
+            const picked = sweepPhraseOnLine(page.items, y, this.pdfRangeAnchor.nx, word.nx + word.nw);
+            this.commitPhraseItems(page, picked.length ? picked : [word]);
+            return;
+          }
+          this.pdfRangeAnchor = { page: page.num, nx: word.nx, ny: word.ny, nw: word.nw, str: word.str };
+          if (ev.ctrlKey || ev.metaKey || ev.altKey) {
+            this.onPdfTextClick(page, word);
+            return;
+          }
+          if (this.teachWantPhrase && !phraseBreakToken(word)) {
+            const run = expandPhraseRun(page.items, word);
+            this.commitPhraseItems(page, run.length ? run : [word]);
+            return;
+          }
+          this.onPdfTextClick(page, word);
         },
         onPdfTextClick(page, it, extra) {
           extra = extra || {};
+          const phrase = !!(extra.phrase || (it && mapIsPhrase({ sample: it.str, nw: it.nw, phrase: extra.phrase })));
           if (this.panelMode === 'docs' && !extra.fromPopout) {
             const lab = leftLabelFor(page.items, it);
-            this.undockPost({ type: 'pdf-hit', pageNum: page.num, item: { str: it.str, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh }, label: lab });
+            this.undockPost({
+              type: 'pdf-hit',
+              pageNum: page.num,
+              item: { str: it.str, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh },
+              label: lab,
+              phrase
+            });
             return;
           }
           if (!this.recipeTeach.active || !this.recipeTeach.colId) {
@@ -8017,7 +8337,7 @@
           let sample = String(it.str || '').replace(/\s+/g, ' ').trim();
           if (!sample) return;
           const lab = extra.label != null ? extra.label : leftLabelFor(page.items, it);
-          if (lab && sample.toLowerCase().indexOf(lab.toLowerCase()) === 0) {
+          if (!phrase && lab && sample.toLowerCase().indexOf(lab.toLowerCase()) === 0) {
             sample = sample.slice(lab.length).replace(/^[\s:]+/, '') || sample;
           }
           const pick = String(this.recipeTeach.pick || '');
@@ -8027,7 +8347,7 @@
           ensureRecipeLineTable(this.store, this.recipeDraft);
           const qtyCol = qtyLikeColumn(mapCol) || (isQtyToken(sample) && !skuLikeSample(sample));
           let qtySnapNote = '';
-          if (qtyCol && !skuLikeSample(sample)) {
+          if (qtyCol && !skuLikeSample(sample) && !phrase) {
             const snapped = snapQtyTeachHit(page.items, it);
             if (snapped && snapped.item) {
               it = snapped.item;
@@ -8035,11 +8355,12 @@
               qtySnapNote = snapped.note || '';
             }
           }
-          const hasProductLines = (this.recipeDraft.maps || []).some((m) => m.role === 'line' && (skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample))));
+          const hasProductLines = (this.recipeDraft.maps || []).some((m) => m.role === 'line' && (mapIsPhrase(m) || skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample))));
           const qtyForPacked = (hasProductLines || this.recipeTeach.line) && (qtyLikeColumn(mapCol) || (isQtyToken(sample) && !skuLikeSample(sample)));
-          const lineCol = pickRole === 'line' || !!(mapCol && mapCol.teachRole === 'line') || qtyForPacked || (this.recipeTeach.line && skuLikeSample(sample)) || (skuLikeSample(sample) && findColumn(findTable(this.store, this.recipeDraft.lineTableId), this.recipeTeach.colId));
+          const lineCol = pickRole === 'line' || !!(mapCol && mapCol.teachRole === 'line') || qtyForPacked || (this.recipeTeach.line && (phrase || skuLikeSample(sample))) || (skuLikeSample(sample) && findColumn(findTable(this.store, this.recipeDraft.lineTableId), this.recipeTeach.colId));
           if (lineCol) this.recipeTeach.line = true;
           let transform = guessTransform(sample);
+          if (phrase) transform = 'text';
           if (transform === 'number' && mapCol && (isLinkCol(mapCol) || mapCol.type === 'text' || mapCol.type === 'search' || /product|sku|customer/i.test(mapCol.name || ''))) {
             transform = 'text';
           }
@@ -8052,29 +8373,32 @@
             sample,
             label: lab,
             transform,
+            phrase: !!phrase,
             fill: isLinkCol(mapCol) ? 'lookup' : 'pdf'
           };
           const hintTable = tableForColumnHint(this.store, mapCol);
+          const nameLike = phrase || (!skuLikeSample(sample) && /[a-zæøå]/i.test(sample));
           if (isLinkCol(mapCol) && mapCol.link) {
             const lt = findTable(this.store, mapCol.link.tableId);
-            const skuCol = lt && /^\d+$/.test(sample) && skuLikeColumns(lt)[0];
+            const skuCol = lt && /^\d+$/.test(sample) && !phrase && skuLikeColumns(lt)[0];
+            const nameCol = lt && (lt.columns || []).find((c) => /name|navn/i.test(c.name));
             map.lookup = {
               tableId: mapCol.link.tableId,
-              matchColumnId: (skuCol && skuCol.id) || mapCol.link.searchColumnId || mapCol.link.matchColumnId || mapCol.link.displayColumnId,
+              matchColumnId: (skuCol && skuCol.id) || (nameLike && nameCol && nameCol.id) || mapCol.link.searchColumnId || mapCol.link.matchColumnId || mapCol.link.displayColumnId,
               out: 'link',
-              match: /^\d+$/.test(sample) ? 'equals' : 'contains',
+              match: /^\d+$/.test(sample) && !phrase ? 'equals' : 'contains',
               also: []
             };
             map.fill = 'lookup';
           } else if (hintTable && /product|customer|sku|item/i.test(mapCol.name || '')) {
-            const skuCol = /^\d+$/.test(sample) && skuLikeColumns(hintTable)[0];
+            const skuCol = /^\d+$/.test(sample) && !phrase && skuLikeColumns(hintTable)[0];
             const nameCol = (hintTable.columns || []).find((c) => /name|navn/i.test(c.name));
             map.fill = 'lookup';
             map.lookup = {
               tableId: hintTable.id,
               matchColumnId: (skuCol && skuCol.id) || (nameCol && nameCol.id) || (hintTable.columns[0] && hintTable.columns[0].id),
               out: isLinkCol(mapCol) ? 'link' : ((nameCol && nameCol.id) || 'link'),
-              match: /^\d+$/.test(sample) ? 'equals' : 'contains',
+              match: /^\d+$/.test(sample) && !phrase ? 'equals' : 'contains',
               also: []
             };
           } else {
@@ -8091,6 +8415,14 @@
           const stackOnSameColumn = existing && (existing.role === 'line' || map.role === 'line' || skuLikeSample(sample) || skuLikeSample(existing.sample) || this.recipeTeach.line);
           if (stackOnSameColumn) {
             existing.role = 'line';
+            if (phrase) existing.phrase = true;
+            if (phrase && (it.nw || 0) > (existing.nw || 0)) {
+              existing.nx = it.nx;
+              existing.nw = it.nw;
+              existing.ny = it.ny;
+              existing.nh = it.nh;
+              existing.sample = sample;
+            }
             if (!Array.isArray(existing.choices)) existing.choices = existing.sample ? [{ sample: existing.sample, page: existing.page, nx: existing.nx, ny: existing.ny, nw: existing.nw, nh: existing.nh }] : [];
             const already = mapChoiceLabel(existing);
             if (already.indexOf(sample) >= 0) {
@@ -8098,12 +8430,12 @@
               return;
             }
             if (recipeLineSkipped(this.recipeDraft, { [existing.columnId]: sample }, [sample])) {
-              this.toast(sample + ' is a crate/box line — skipped. Click the next product number in this column.');
+              this.toast(sample + ' is a crate/box line — skipped. Drag the next product name in this column.');
               return;
             }
             existing.choices.push({ sample, page: page.num, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh });
             this.saveRecipe();
-            this.recipeHint = this.recipeMapColumnName(existing) + ' examples: ' + mapChoiceLabel(existing).join(', ') + '. Fill still reads every unique number in this column on other PDFs.';
+            this.recipeHint = this.recipeMapColumnName(existing) + ' examples: ' + mapChoiceLabel(existing).join(', ') + '. Fill still reads every unique value in this column on other PDFs.';
             this.toast('Added ' + sample + ' as an example. Other PDFs are not limited to this list.');
             return;
           }
@@ -8111,11 +8443,17 @@
           map.choices = [{ sample, page: page.num, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh }];
           this.recipeDraft.maps.push(map);
           if (!this.recipeDraft.detect) this.recipeDraft.detect = sample;
+          if (map.role === 'line' && phrase && this.recipeDraft.lineUnique) {
+            this.recipeDraft.lineUnique.columnId = map.columnId;
+          }
           this.saveRecipe();
           if (map.role === 'line') {
             normalizeLineSkip(this.recipeDraft);
             if (skuLikeSample(sample) && !this.recipeDraft.lineSkip.enabled) this.recipeDraft.lineSkip.enabled = true;
-            if (isQtyToken(sample) && !skuLikeSample(sample)) {
+            if (phrase) {
+              this.recipeHint = 'Mapped the product-name column from “' + sample + '”. Other PDFs can list different names in this band — Fill matches Products on the name, not the customer SKU.';
+              this.toast('Name column mapped. Later orders still fill from this description band.');
+            } else if (isQtyToken(sample) && !skuLikeSample(sample)) {
               this.recipeHint = qtySnapNote
                 ? 'Mapped ' + sample + ' boxes from ' + qtySnapNote + '. Other product lines use that same column (Antal kolli or Ks.), not pack size.'
                 : 'Box amount ' + sample + ' is tied to that packed product line. Other SKUs keep their own counts (360, 1.344, 720) — the first number is not copied onto every row.';
@@ -9004,6 +9342,73 @@
           if (!snapPack || String(snapPack.item.str) !== '56') console.warn('clicking 6 KG must snap to Antal kolli 56', snapPack);
           const snapHead = snapQtyTeachHit(dItems, dItems.find((x) => x.str === 'kolli'));
           if (!snapHead || String(snapHead.item.str) !== '56') console.warn('clicking kolli header must bind first product colli 56', snapHead);
+          const namePages = [{ num: 1, items: [
+            { str: '306810', nx: 0.08, ny: 0.20, nw: 0.07, nh: 0.018 },
+            { str: 'Ærter', nx: 0.18, ny: 0.20, nw: 0.07, nh: 0.018 },
+            { str: 'Danske', nx: 0.26, ny: 0.20, nw: 0.08, nh: 0.018 },
+            { str: '500gr.', nx: 0.35, ny: 0.20, nw: 0.07, nh: 0.018 },
+            { str: '360', nx: 0.48, ny: 0.20, nw: 0.05, nh: 0.018 },
+            { str: '379015', nx: 0.08, ny: 0.26, nw: 0.07, nh: 0.018 },
+            { str: 'Europool', nx: 0.18, ny: 0.26, nw: 0.09, nh: 0.018 },
+            { str: 'kasse', nx: 0.28, ny: 0.26, nw: 0.06, nh: 0.018 },
+            { str: '360', nx: 0.48, ny: 0.26, nw: 0.05, nh: 0.018 },
+            { str: '306806', nx: 0.08, ny: 0.32, nw: 0.07, nh: 0.018 },
+            { str: 'Sugar', nx: 0.18, ny: 0.32, nw: 0.07, nh: 0.018 },
+            { str: 'Snaps,', nx: 0.26, ny: 0.32, nw: 0.07, nh: 0.018 },
+            { str: 'DK', nx: 0.34, ny: 0.32, nw: 0.04, nh: 0.018 },
+            { str: '1.344', nx: 0.48, ny: 0.32, nw: 0.05, nh: 0.018 },
+            { str: '306805', nx: 0.08, ny: 0.44, nw: 0.07, nh: 0.018 },
+            { str: 'Ærter', nx: 0.18, ny: 0.44, nw: 0.07, nh: 0.018 },
+            { str: 'Løse,', nx: 0.26, ny: 0.44, nw: 0.06, nh: 0.018 },
+            { str: 'DK', nx: 0.33, ny: 0.44, nw: 0.04, nh: 0.018 },
+            { str: '720', nx: 0.48, ny: 0.44, nw: 0.05, nh: 0.018 }
+          ] }];
+          const nameMap = {
+            role: 'line', columnId: 'prod', page: 1, nx: 0.18, ny: 0.20, nw: 0.24, nh: 0.018,
+            sample: 'Ærter Danske 500gr.', transform: 'text', phrase: true, fill: 'pdf'
+          };
+          const qtyMap = { role: 'line', columnId: 'qty', page: 1, nx: 0.48, ny: 0.20, nw: 0.05, nh: 0.018, sample: '360', transform: 'number-dk' };
+          const nameLines = extractFromMaps(namePages, {
+            maps: [nameMap, qtyMap],
+            lineSkip: { enabled: true, rules: [{ op: 'endsWith', value: '15' }] },
+            lineUnique: { enabled: true, columnId: 'prod' }
+          });
+          if (nameLines.lines.length !== 3) console.warn('name-band fill should keep 3 products, skip Europool', nameLines.lines);
+          if (nameLines.lines[0].prod !== 'Ærter Danske 500gr.') console.warn('joined product name failed', nameLines.lines[0]);
+          if (nameLines.lines[1].prod !== 'Sugar Snaps, DK') console.warn('second name-band line failed', nameLines.lines[1]);
+          if (nameLines.lines[2].prod !== 'Ærter Løse, DK') console.warn('third name-band line failed', nameLines.lines[2]);
+          if (nameLines.lines[0].qty !== 360) console.warn('qty beside name band failed', nameLines.lines[0]);
+          const oneWord = extractFromMaps(namePages, {
+            maps: [{ role: 'line', columnId: 'prod', page: 1, nx: 0.18, ny: 0.20, nw: 0.07, nh: 0.018, sample: 'Ærter', transform: 'text' }]
+          });
+          if (oneWord.lines[0] && oneWord.lines[0].prod === 'Ærter Danske 500gr.') console.warn('single-word click must not join the rest of the name');
+          const nameBox = readClickMap(namePages, nameMap);
+          if (nameBox !== 'Ærter Danske 500gr.') console.warn('header/line phrase box should join words', nameBox);
+          if (recipeTextMatch('Ærter Danske 500gr.', 'Ærter Løse, DK', 'contains')) console.warn('full pea names must not fuzzy-match each other');
+          if (!recipeTextMatch('Ærter Danske 500gr.', 'Ærter Danske 500gr', 'contains')) console.warn('name contains should ignore a trailing dot');
+          const nameWs = sampleWorkspace('NameLookup');
+          const pTab = nameWs.tables.find((x) => x.name === 'Products');
+          const pName = pTab.columns.find((c) => c.name === 'Name');
+          pTab.records.push({ id: 'rec_prod_aerter', createdAt: Date.now(), updatedAt: Date.now(), data: { [pName.id]: 'Ærter Danske 500gr' } });
+          pTab.records.push({ id: 'rec_prod_lose', createdAt: Date.now(), updatedAt: Date.now(), data: { [pName.id]: 'Ærter Løse, DK' } });
+          const nameLookup = { fill: 'lookup', lookup: { tableId: pTab.id, matchColumnId: pName.id, match: 'contains', out: 'link' } };
+          if (resolveRecipeFill(nameWs, nameLookup, 'Ærter Danske 500gr.') !== 'rec_prod_aerter') console.warn('phrase lookup should hit Ærter Danske', resolveRecipeFill(nameWs, nameLookup, 'Ærter Danske 500gr.'));
+          if (resolveRecipeFill(nameWs, nameLookup, 'Ærter Løse, DK') !== 'rec_prod_lose') console.warn('phrase lookup should hit Ærter Løse');
+          if (resolveRecipeFill(nameWs, nameLookup, 'Ærter') !== '') console.warn('ambiguous Ærter must not pick a pea product', resolveRecipeFill(nameWs, nameLookup, 'Ærter'));
+          const uniqName = uniqueRecipeLines({ lineUnique: { enabled: true, columnId: 'prod' } }, [
+            { prod: 'Ærter Danske 500gr.', sku: '111111' },
+            { prod: 'Ærter Danske 500gr.', sku: '222222' }
+          ]);
+          if (uniqName.length !== 1) console.warn('same product name with different customer SKUs is one line', uniqName);
+          const danske = namePages[0].items.find((x) => x.str === 'Danske');
+          const runDanske = joinPdfItemTexts(expandPhraseRun(namePages[0].items, danske));
+          if (runDanske !== 'Ærter Danske 500gr.') console.warn('clicking Danske should take the whole name', runDanske);
+          const skuOnly = joinPdfItemTexts(expandPhraseRun(namePages[0].items, namePages[0].items.find((x) => x.str === '306810')));
+          if (skuOnly !== '306810') console.warn('SKU click must stay one token', skuOnly);
+          const qtyOnly = joinPdfItemTexts(expandPhraseRun(namePages[0].items, namePages[0].items.find((x) => x.str === '360')));
+          if (qtyOnly !== '360') console.warn('qty click must stay one token', qtyOnly);
+          const swept = joinPdfItemTexts(sweepPhraseOnLine(namePages[0].items, 0.20 + 0.009, 0.18, 0.38));
+          if (swept !== 'Ærter Danske 500gr.') console.warn('line sweep should snap to name words, not 360', swept);
           const mapCols = recipeMapTargetColumns({ tables: [
             { id: 'tbl_oh', name: 'Order Handling', columns: [{ id: 'col_pack', name: 'Packed Product' }] },
             { id: 'tbl_lines', name: 'Line Items', columns: [{ id: 'col_l_itemno', name: 'Item No' }] }
@@ -9158,6 +9563,10 @@
           if (!ac.some((n) => /acme/i.test(n))) console.warn('search type-ahead did not match Acme on ac', ac);
           console.warn = origWarn;
           window.__forgegridTestWarns = warns;
+          try {
+            document.documentElement.setAttribute('data-fg-warns', String(warns.length));
+            if (warns.length) document.documentElement.setAttribute('data-fg-warn-text', warns.slice(0, 12).join(' · '));
+          } catch (e) {}
         },
         onPaste(e) {
           const target = e.target;
