@@ -406,8 +406,8 @@
             <div v-else class="h-full rounded-xl border border-line bg-ink-950 overflow-hidden relative" :class="recipeTeach.active && 'pdf-teach'">
               <div v-if="activeDoc.kind==='pdf'" class="h-full overflow-auto bg-white">
                 <div v-if="!pdfView.pages.length" class="h-full grid place-items-center text-ink-900 text-sm">Reading PDF…</div>
-                <div v-for="page in pdfView.pages" :key="page.num" class="pdf-page mx-auto">
-                  <canvas :id="'pdf-canvas-' + page.num" :width="page.width" :height="page.height"></canvas>
+                <div v-for="page in pdfView.pages" :key="(activeDoc && activeDoc.id) + '-' + page.num" class="pdf-page mx-auto">
+                  <canvas :ref="el => renderPdfCanvas(page, el)" :width="page.width" :height="page.height"></canvas>
                   <div class="pdf-hits">
                     <button v-for="(it, i) in page.items" :key="i" type="button" class="pdf-hit"
                       :class="pdfHitClass(page, it)"
@@ -6520,12 +6520,14 @@
           this.view = 'form';
         },
         async showAttachmentDoc(meta, url, kind, text) {
+          const blob = (attachmentBlobs.get(meta.id) || {}).blob;
           let doc = this.docs.find((d) => d.attachId === meta.id);
           if (!doc) {
-            doc = { id: uid('doc'), attachId: meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: text || '' };
+            doc = { id: uid('doc'), attachId: meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: text || '', file: blob || null };
             this.docs.push(doc);
           } else {
             doc.url = url; doc.kind = kind; doc.text = text || doc.text || ''; doc.name = meta.name;
+            if (blob) doc.file = blob;
           }
           this.activeDocId = doc.id;
           if (this.undocked.docs) this.sendUndockPdf();
@@ -6834,67 +6836,71 @@
           this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
           this.toast('Mapped ' + sample + ' → column.');
         },
+        async parsePdfPages(doc) {
+          if (!doc || !window.pdfjsLib) return [];
+          if (doc._pdfPages && doc._pdfPages.length) return doc._pdfPages;
+          const data = await this.pdfBytes(doc);
+          const pdf = await window.pdfjsLib.getDocument({ data }).promise;
+          const pages = [];
+          for (let p = 1; p <= pdf.numPages; p++) {
+            const page = await pdf.getPage(p);
+            const viewport = page.getViewport({ scale: 1.35 });
+            const content = await page.getTextContent();
+            const items = explodePdfWords(content.items.filter((it) => it.str && String(it.str).trim()).map((it) => {
+              const r = pdfItemRect(it, viewport);
+              return {
+                str: it.str,
+                nx: r.x / viewport.width,
+                ny: r.y / viewport.height,
+                nw: r.w / viewport.width,
+                nh: r.h / viewport.height
+              };
+            }));
+            pages.push({ num: p, width: viewport.width, height: viewport.height, items, viewport, page });
+          }
+          doc._pdfPages = pages;
+          return pages;
+        },
         async loadPdfView(doc) {
           if (!doc || !window.pdfjsLib) return;
           const key = doc.id || doc.url;
-          if (this.pdfView.src === key && this.pdfView.pages.length) {
-            await this.$nextTick();
-            await this.paintPdfCanvases();
-            return;
-          }
-          this._pdfLoad = (this._pdfLoad || 0) + 1;
-          const token = this._pdfLoad;
-          this.pdfView = { pages: [], src: key };
           try {
-            const data = await this.pdfBytes(doc);
-            if (token !== this._pdfLoad) return;
-            const pdf = await window.pdfjsLib.getDocument({ data }).promise;
-            const pages = [];
-            for (let p = 1; p <= pdf.numPages; p++) {
-              const page = await pdf.getPage(p);
-              const viewport = page.getViewport({ scale: 1.35 });
-              const content = await page.getTextContent();
-              const items = explodePdfWords(content.items.filter((it) => it.str && String(it.str).trim()).map((it) => {
-                const r = pdfItemRect(it, viewport);
-                return {
-                  str: it.str,
-                  nx: r.x / viewport.width,
-                  ny: r.y / viewport.height,
-                  nw: r.w / viewport.width,
-                  nh: r.h / viewport.height
-                };
-              }));
-              pages.push({ num: p, width: viewport.width, height: viewport.height, items, viewport, page });
+            const pages = await this.parsePdfPages(doc);
+            if ((this.activeDoc && this.activeDoc.id) !== (doc.id) && this.pdfView.src && this.pdfView.src !== key) {
+              /* another doc became active */
             }
-            if (token !== this._pdfLoad) return;
+            if (!this.activeDoc || this.activeDoc.id !== doc.id) return;
             this.pdfView = { pages, src: key };
-            await this.$nextTick();
-            if (token !== this._pdfLoad) return;
-            await this.paintPdfCanvases();
           } catch (e) {
             this.recipeHint = 'Could not render this PDF. Try Open file again.';
-            this.toast('This PDF did not draw. Re-open the file (some uploads lose the bytes after a refresh).', 'warn');
+            this.toast('This PDF did not draw. Re-open the file from the paper icon or Docs → Open file.', 'warn');
           }
         },
-        async paintPdfCanvases() {
-          const pages = (this.pdfView && this.pdfView.pages) || [];
-          for (let i = 0; i < pages.length; i++) {
-            const pg = pages[i];
-            const canvas = document.getElementById('pdf-canvas-' + pg.num);
-            if (!canvas || !pg.page) continue;
-            if (canvas.width !== pg.width) canvas.width = pg.width;
-            if (canvas.height !== pg.height) canvas.height = pg.height;
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            try {
-              if (pg._renderTask) pg._renderTask.cancel();
-              pg._renderTask = pg.page.render({ canvasContext: ctx, viewport: pg.viewport });
-              await pg._renderTask.promise;
-            } catch (e) {
-              if (e && e.name === 'RenderingCancelledException') continue;
-            }
+        renderPdfCanvas(pg, canvas) {
+          if (!canvas || !pg || !pg.page) return;
+          if (pg._canvas === canvas && pg._drawn) return;
+          pg._canvas = canvas;
+          pg._drawn = false;
+          if (canvas.width !== pg.width) canvas.width = pg.width;
+          if (canvas.height !== pg.height) canvas.height = pg.height;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          const token = (pg._paint = (pg._paint || 0) + 1);
+          if (pg._renderTask) {
+            try { pg._renderTask.cancel(); } catch (e) {}
           }
+          const task = pg.page.render({ canvasContext: ctx, viewport: pg.viewport });
+          pg._renderTask = task;
+          task.promise.then(() => {
+            if (token === pg._paint) pg._drawn = true;
+          }).catch((e) => {
+            if (e && e.name === 'RenderingCancelledException') return;
+            pg._drawn = false;
+          });
+        },
+        paintPdfCanvases() {
+          /* canvases paint via :ref when the Docs pane is actually open */
         },
         lookupColumns(tableId) {
           const t = findTable(this.store, tableId);
@@ -6971,12 +6977,13 @@
           this.recipeBusy = false;
         },
         recipeForAttach(col, text) {
-          const tableId = this.currentTableId;
-          const list = (this.store.recipes || []).filter((r) => !r.headerTableId || r.headerTableId === tableId);
-          const onCol = list.filter((r) => !r.attachColumnId || r.attachColumnId === col.id);
-          const pool = onCol.length ? onCol : list;
-          const hit = detectRecipe(pool, text);
+          const list = this.store.recipes || [];
+          const hit = detectRecipe(list, text);
           if (hit) return hit;
+          const tableId = this.currentTableId;
+          const onSheet = list.filter((r) => !r.headerTableId || r.headerTableId === tableId);
+          const onCol = onSheet.filter((r) => !r.attachColumnId || r.attachColumnId === col.id);
+          const pool = onCol.length ? onCol : onSheet;
           if (pool.length === 1) return pool[0];
           return pool.find((r) => r.attachColumnId === col.id) || null;
         },
@@ -6994,8 +7001,7 @@
             return;
           }
           const url = hit.url || URL.createObjectURL(blob);
-          const doc = { id: 'att-' + meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: '', file: blob };
-          if (!this.undocked.docs) this.splitOpen = true;
+          const doc = { id: 'att-' + meta.id, attachId: meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: '', file: blob };
           this.recipeBusy = true;
           this.recipeHint = 'Reading attached file…';
           try {
@@ -7011,11 +7017,7 @@
             const existing = this.docs.find((d) => d.attachId === meta.id);
             if (existing) {
               existing.url = url; existing.text = doc.text; existing.file = blob; existing.kind = kind;
-              this.activeDocId = existing.id;
               doc.id = existing.id;
-            } else {
-              this.docs.push(Object.assign({}, doc, { attachId: meta.id }));
-              this.activeDocId = doc.id;
             }
             await this.applyRecipeFill(recipe, doc, rec, { skipAttach: true, replaceLines: true, keepView: true });
           } catch (e) {
@@ -7049,10 +7051,18 @@
           opts = opts || {};
           try {
             if (!doc.text) doc.text = await this.readDocText(doc);
-            if (doc.kind === 'pdf' && (!this.pdfView.pages.length || this.pdfView.src !== doc.url)) await this.loadPdfView(doc);
+            let mapPages = this.pdfView.pages;
+            if (doc.kind === 'pdf') {
+              mapPages = await this.parsePdfPages(doc);
+              if (this.docsPaneVisible && this.activeDoc && (this.activeDoc.id === doc.id || this.activeDoc.attachId && doc.attachId && this.activeDoc.attachId === doc.attachId)) {
+                this.pdfView = { pages: mapPages, src: doc.id || doc.url };
+                await this.$nextTick();
+              }
+            }
             const extracted = runRecipeExtract(doc.text, recipe);
-            const click = (recipe.maps || []).length && this.pdfView.pages.length ? extractFromMaps(this.pdfView.pages, recipe) : { header: {}, lines: [] };
-            const headerTable = findTable(this.store, recipe.headerTableId) || this.currentTable;
+            const click = (recipe.maps || []).length && mapPages && mapPages.length ? extractFromMaps(mapPages, recipe) : { header: {}, lines: [] };
+            const headerTable = (this.store.tables || []).find((t) => rec && (t.records || []).some((r) => r.id === rec.id))
+              || findTable(this.store, recipe.headerTableId) || this.currentTable;
             if (!headerTable || !rec) {
               this.toast('Pick a header sheet on the recipe.', 'warn');
               this.recipeBusy = false;
