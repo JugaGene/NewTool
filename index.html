@@ -2765,7 +2765,7 @@
     }
 
     function emptyLineSkip() {
-      return { enabled: false, columnId: '', rules: [{ op: 'endsWith', value: '15' }] };
+      return { enabled: true, columnId: '', rules: [{ op: 'endsWith', value: '15' }] };
     }
 
     function normalizeLineSkip(recipe) {
@@ -2778,7 +2778,7 @@
         }))
         : [{ op: 'endsWith', value: '15' }];
       recipe.lineSkip = {
-        enabled: !!src.enabled,
+        enabled: src.enabled == null ? true : !!src.enabled,
         columnId: src.columnId || '',
         rules
       };
@@ -2881,7 +2881,8 @@
     }
 
     function skuLikeSample(s) {
-      return /^\d{4,}$/.test(String(s == null ? '' : s).replace(/[\s.]/g, ''));
+      const t = String(s == null ? '' : s).replace(/[\s\u00a0]/g, '');
+      return /^\d{5,8}$/.test(t);
     }
 
     function ensureRecipeLineTable(store, recipe) {
@@ -3444,6 +3445,9 @@
           if (!filled) return;
           const extras = itemsOnPdfLine(items, c.y).map((it) => it.str);
           if (recipeLineSkipped(recipe, row, extras)) return;
+          if (extras.some((s) => /europool|kasse|kolli|emballage/i.test(String(s || '')))) return;
+          const sku = skuValueFromLineRow(row);
+          if (sku && /15$/.test(String(sku).replace(/\s/g, ''))) return;
           lines.push(row);
         });
       }
@@ -8385,18 +8389,22 @@
             { str: '306810', nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02 },
             { str: '360', nx: 0.4, ny: 0.20, nw: 0.05, nh: 0.02 },
             { str: '379015', nx: 0.1, ny: 0.26, nw: 0.08, nh: 0.02 },
+            { str: 'Europool kasse', nx: 0.22, ny: 0.26, nw: 0.12, nh: 0.02 },
             { str: '360', nx: 0.4, ny: 0.26, nw: 0.05, nh: 0.02 },
             { str: '306806', nx: 0.1, ny: 0.32, nw: 0.08, nh: 0.02 },
-            { str: '1344', nx: 0.4, ny: 0.32, nw: 0.05, nh: 0.02 }
+            { str: '1.344', nx: 0.11, ny: 0.38, nw: 0.08, nh: 0.02 },
+            { str: '1.344', nx: 0.4, ny: 0.32, nw: 0.05, nh: 0.02 },
+            { str: '306805', nx: 0.1, ny: 0.44, nw: 0.08, nh: 0.02 },
+            { str: '720', nx: 0.4, ny: 0.44, nw: 0.05, nh: 0.02 }
           ] }], {
             maps: [
               { role: 'line', columnId: 'sku', page: 1, nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02, sample: '306810', transform: 'text' },
-              { role: 'line', columnId: 'qty', page: 1, nx: 0.4, ny: 0.20, nw: 0.05, nh: 0.02, sample: '360', transform: 'number' }
+              { role: 'line', columnId: 'qty', page: 1, nx: 0.4, ny: 0.20, nw: 0.05, nh: 0.02, sample: '360', transform: 'number-dk' }
             ],
-            lineSkip: { enabled: true, rules: [{ op: 'endsWith', value: '15' }] }
+            lineSkip: { enabled: false, rules: [{ op: 'endsWith', value: '15' }] }
           });
-          if (clickLines.lines.length !== 2 || clickLines.lines.some((r) => String(r.sku).slice(-2) === '15')) console.warn('click map crate skip failed', clickLines.lines);
-          if (Number(clickLines.lines[0].qty) !== 360 || Number(clickLines.lines[1].qty) !== 1344) console.warn('each product row should keep its own qty', clickLines.lines);
+          if (clickLines.lines.length !== 3 || clickLines.lines.some((r) => String(r.sku).slice(-2) === '15')) console.warn('click map should keep 3 products, skip crate and 1.344 qty', clickLines.lines);
+          if (clickLines.lines.map((r) => String(r.sku)).join(',') !== '306810,306806,306805') console.warn('product sku order failed', clickLines.lines);
           const lkWs = sampleWorkspace('Lookup');
           const custF = remR.headerFields.find((f) => f.fill === 'lookup');
           if (resolveRecipeFill(lkWs, custF, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('customer lookup failed');
