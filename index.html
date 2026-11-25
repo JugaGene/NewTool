@@ -3039,34 +3039,63 @@
       return merged;
     }
 
-    function qtyBeforeUnit(s) {
-      const m = String(s || '').replace(/\u00a0/g, ' ').match(/(\d{1,3}(?:\s*\.\s*\d{3})+|\d{1,5})\s*(Ks\.?|Kolli|Kg|Stk)\b/i);
+    function qtyBeforeBoxUnit(s) {
+      const m = String(s || '').replace(/\u00a0/g, ' ').match(/(\d{1,3}(?:\s*\.\s*\d{3})+|\d{1,5})\s*(Ks\.?|Kolli)\b/i);
       return m ? m[1].replace(/\s+/g, '') : '';
+    }
+
+    function isPackSizeUnit(s) {
+      return /^(kg|g|st|stk|bak)$/i.test(String(s || '').trim());
+    }
+
+    function isPackSizeQtyItem(it, merged) {
+      if (!it || !isQtyToken(it.str)) return false;
+      const i = merged.indexOf(it);
+      const nxt = i >= 0 ? merged[i + 1] : null;
+      return !!(nxt && isPackSizeUnit(nxt.str));
+    }
+
+    function colliHeaderX(items) {
+      const headers = (items || []).filter((it) => /^kolli$/i.test(String(it.str || '').trim()));
+      if (!headers.length) return null;
+      headers.sort((a, b) => a.ny - b.ny);
+      const h = headers[0];
+      return h.nx + h.nw / 2;
+    }
+
+    function closestQtyHit(hits, x, maxDx) {
+      let best = null;
+      let bestD = 99;
+      (hits || []).forEach((it) => {
+        const dx = Math.abs((it.nx + it.nw / 2) - x);
+        if (dx > maxDx) return;
+        if (dx < bestD) { bestD = dx; best = it; }
+      });
+      return best;
     }
 
     function readQtyOnLine(items, map, y) {
       const cx = (map && map.nx != null) ? map.nx + (map.nw || 0) / 2 : 0.5;
       const merged = joinLineNumberTokens(items, y);
+      const qtyHits = merged.filter((it) => isQtyToken(it.str) && !isPackSizeQtyItem(it, merged));
+      const kolliX = colliHeaderX(items);
+      if (kolliX != null) {
+        const atKolli = closestQtyHit(qtyHits, kolliX, 0.08);
+        if (atKolli) return atKolli.str;
+      }
       const lineText = merged.map((it) => it.str).join(' ');
-      const fromPhrase = qtyBeforeUnit(lineText) || merged.map((it) => qtyBeforeUnit(it.str)).filter(Boolean)[0];
+      const fromPhrase = qtyBeforeBoxUnit(lineText) || merged.map((it) => qtyBeforeBoxUnit(it.str)).filter(Boolean)[0];
       if (fromPhrase) return fromPhrase;
-      const qtyHits = merged.filter((it) => isQtyToken(it.str));
-      const units = merged.filter((it) => /\b(ks\.?|kolli|kg|stk)\b/i.test(String(it.str || '').trim()));
+      const units = merged.filter((it) => /^(ks\.?|kolli)$/i.test(String(it.str || '').trim()));
       if (units.length) {
         const u = units[0];
         const before = qtyHits.filter((it) => it.nx + it.nw <= u.nx + 0.02).sort((a, b) => b.nx - a.nx)[0];
         if (before) return before.str;
       }
-      let best = null;
-      let bestD = 99;
-      qtyHits.forEach((it) => {
-        const dx = Math.abs((it.nx + it.nw / 2) - cx);
-        if (dx > 0.08) return;
-        if (dx < bestD) { bestD = dx; best = it; }
-      });
-      if (best) return best.str;
-      const near = nearestPdfItem(items, cx, y, 0.06, 0.012);
-      return near && isQtyToken(near.str) ? near.str : '';
+      const atMap = closestQtyHit(qtyHits, cx, 0.08);
+      if (atMap) return atMap.str;
+      const near = nearestPdfItem(qtyHits.length ? qtyHits : items, cx, y, 0.06, 0.012);
+      return near && isQtyToken(near.str) && !isPackSizeQtyItem(near, merged) ? near.str : '';
     }
 
     function crateQtyBelow(items, map, y) {
@@ -8809,6 +8838,37 @@
             ]
           });
           if (gluedQty.lines.map((r) => Number(r.qty)).join(',') !== '360,1344,720') console.warn('must not glue 10+1 into 101 / 1.011 / 161', gluedQty.lines);
+          const dagrofaQty = extractFromMaps([{ num: 1, items: [
+            { str: 'Antal', nx: 0.6115, ny: 0.2884, nw: 0.0285, nh: 0.0134 },
+            { str: 'kolli', nx: 0.6115, ny: 0.3086, nw: 0.0285, nh: 0.0134 },
+            { str: '988010', nx: 0.3134, ny: 0.3321, nw: 0.0342, nh: 0.0134 },
+            { str: 'DK EUROPOOL', nx: 0.1101, ny: 0.3321, nw: 0.0627, nh: 0.0134 },
+            { str: 'KASSE', nx: 0.1785, ny: 0.3321, nw: 0.0285, nh: 0.0134 },
+            { str: '168', nx: 0.6195, ny: 0.3321, nw: 0.0171, nh: 0.0134 },
+            { str: '344845', nx: 0.3134, ny: 0.3758, nw: 0.0342, nh: 0.0134 },
+            { str: '6', nx: 0.0454, ny: 0.3758, nw: 0.0057, nh: 0.0134 },
+            { str: 'KG', nx: 0.0858, ny: 0.3758, nw: 0.0114, nh: 0.0134 },
+            { str: 'ÆRTER LØSE', nx: 0.1101, ny: 0.3758, nw: 0.057, nh: 0.0134 },
+            { str: '1', nx: 0.207, ny: 0.3758, nw: 0.0057, nh: 0.0134 },
+            { str: 'KG', nx: 0.2184, ny: 0.3758, nw: 0.0114, nh: 0.0134 },
+            { str: '56', nx: 0.6195, ny: 0.3758, nw: 0.0114, nh: 0.0134 },
+            { str: '2', nx: 0.6757, ny: 0.3758, nw: 0.0057, nh: 0.0134 },
+            { str: '340250', nx: 0.3134, ny: 0.4195, nw: 0.0342, nh: 0.0134 },
+            { str: '10', nx: 0.0454, ny: 0.4195, nw: 0.0114, nh: 0.0134 },
+            { str: 'BAK', nx: 0.0858, ny: 0.4195, nw: 0.0171, nh: 0.0134 },
+            { str: 'ÆRTER UTRILLO', nx: 0.1101, ny: 0.4195, nw: 0.0741, nh: 0.0134 },
+            { str: '500', nx: 0.1899, ny: 0.4195, nw: 0.0171, nh: 0.0134 },
+            { str: 'G', nx: 0.2127, ny: 0.4195, nw: 0.0057, nh: 0.0134 },
+            { str: '112', nx: 0.6195, ny: 0.4195, nw: 0.0171, nh: 0.0134 },
+            { str: '4', nx: 0.6757, ny: 0.4195, nw: 0.0057, nh: 0.0134 }
+          ] }], {
+            maps: [
+              { role: 'line', columnId: 'sku', page: 1, nx: 0.3134, ny: 0.3758, nw: 0.0342, nh: 0.0134, sample: '344845', transform: 'text' },
+              { role: 'line', columnId: 'qty', page: 1, nx: 0.0454, ny: 0.3758, nw: 0.0057, nh: 0.0134, sample: '6', transform: 'number' }
+            ]
+          });
+          if (dagrofaQty.lines.map((r) => String(r.sku)).join(',') !== '344845,340250') console.warn('Dagrofa products should skip Europool kasse', dagrofaQty.lines);
+          if (dagrofaQty.lines.map((r) => Number(r.qty)).join(',') !== '56,112') console.warn('Dagrofa Antal kolli is 56 loose / 112 trays, not 6 KG pack size', dagrofaQty.lines);
           const mapCols = recipeMapTargetColumns({ tables: [
             { id: 'tbl_oh', name: 'Order Handling', columns: [{ id: 'col_pack', name: 'Packed Product' }] },
             { id: 'tbl_lines', name: 'Line Items', columns: [{ id: 'col_l_itemno', name: 'Item No' }] }
