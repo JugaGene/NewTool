@@ -86,6 +86,8 @@
     .search-combo input { flex: 1; min-width: 0; }
     .search-combo .sq { width: 28px; display: inline-flex; align-items: center; justify-content: center; border-left: 1px solid #223250; color: #8ea0be; background: #10192c; flex-shrink: 0; }
     .search-combo .sq:hover { color: #3ecfbe; }
+    .tear-bar { cursor: grab; user-select: none; }
+    .tear-bar:active { cursor: grabbing; }
     .attach-chip { display: flex; align-items: center; gap: 4px; min-width: 0; }
     .paper-doc { flex-shrink: 0; width: 22px; height: 28px; padding: 0; border: 0; background: transparent; line-height: 0; cursor: pointer; }
     .paper-doc svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 1px 1px rgba(0,0,0,.35)); }
@@ -377,7 +379,7 @@
 
         <!-- Split document pane -->
         <section v-if="docsPaneVisible" class="shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-line bg-ink-900 md:min-w-[240px]" :class="panelMode==='docs' && 'flex-1 min-w-0 border-0'" :style="splitPaneStyle">
-          <div class="h-10 shrink-0 border-b border-line flex items-center gap-2 px-2">
+          <div class="h-10 shrink-0 border-b border-line flex items-center gap-2 px-2 tear-bar" title="Drag this bar to open a window on another monitor" @mousedown="startDocsTear">
             <div class="text-xs font-medium truncate">Source document</div>
             <div class="ml-auto flex items-center gap-1">
               <label class="text-[11px] rounded-md px-2 py-1 bg-ink-700 cursor-pointer hover:brightness-110">
@@ -402,21 +404,23 @@
               <p class="text-xs text-mute mt-1 max-w-xs">Use Open file above, or drop a PDF here. To teach a recipe, open the PDF first, then Recipes → Teach on PDF, pick a column, and click the value on the page.</p>
             </div>
             <div v-else class="h-full rounded-xl border border-line bg-ink-950 overflow-hidden relative" :class="recipeTeach.active && 'pdf-teach'">
-              <div v-if="activeDoc.kind==='pdf'" ref="pdfScroll" class="h-full overflow-auto bg-white">
-                <div v-if="!pdfView.pages.length" class="h-full grid place-items-center text-ink-900 text-sm">Reading PDF…</div>
-                <div v-for="page in pdfView.pages" :key="page.num" class="pdf-page mx-auto">
-                  <canvas :data-pdf-page="page.num" :width="page.width" :height="page.height"></canvas>
-                  <div class="pdf-hits">
-                    <button v-for="(it, i) in page.items" :key="i" type="button" class="pdf-hit"
-                      :class="pdfHitClass(page, it)"
-                      :style="pdfItemStyle(it)"
-                      :title="it.str"
-                      @click.stop="onPdfTextClick(page, it)"></button>
+              <div v-if="activeDoc.kind==='pdf'" class="h-full relative bg-white">
+                <iframe v-show="!pdfClickReady" :src="pdfFrameSrc" class="absolute inset-0 w-full h-full border-0 bg-white" title="PDF preview"></iframe>
+                <div v-show="pdfClickReady" class="absolute inset-0 overflow-auto">
+                  <div v-for="page in pdfView.pages" :key="(activeDoc && activeDoc.id) + '-' + page.num" class="pdf-page mx-auto">
+                    <canvas :ref="el => renderPdfCanvas(page, el)" :width="page.width" :height="page.height"></canvas>
+                    <div class="pdf-hits">
+                      <button v-for="(it, i) in page.items" :key="i" type="button" class="pdf-hit"
+                        :class="pdfHitClass(page, it)"
+                        :style="pdfItemStyle(it)"
+                        :title="it.str"
+                        @click.stop="onPdfTextClick(page, it)"></button>
+                    </div>
                   </div>
                 </div>
               </div>
               <div v-else-if="activeDoc.kind==='image'" class="h-full overflow-auto grid place-items-center bg-ink-950">
-                <img :src="activeDoc.url" :alt="activeDoc.name" class="max-w-full" :style="{ transform: 'scale(' + imgZoom + ')', transformOrigin: 'top center' }" />
+                <img :src="docPreviewSrc" :alt="activeDoc.name" class="max-w-full" :style="{ transform: 'scale(' + imgZoom + ')', transformOrigin: 'top center' }" />
               </div>
               <pre v-else class="h-full overflow-auto p-4 text-[12px] font-mono leading-relaxed whitespace-pre-wrap">{{ activeDoc.text }}</pre>
               <div class="absolute bottom-2 right-2 flex gap-1 z-10">
@@ -931,9 +935,9 @@
       </modal-frame>
 
       <!-- Client recipes -->
-      <modal-frame v-if="recipeOpen && recipesPaneVisible" title="Client order recipes" wide :page="panelMode==='recipes'" @close="closeRecipesPane">
+      <modal-frame v-if="recipeOpen && recipesPaneVisible" title="Client order recipes" wide detachable :page="panelMode==='recipes'" @close="closeRecipesPane" @detach="popOutPanel('recipes')">
         <p class="text-sm text-mute mb-3">Unlock Architect, open a PDF with <strong class="text-mist">Docs → Open file</strong>, then <strong class="text-mist">Teach on PDF</strong>: pick a column and click that value on the page. You can still type regex below if you prefer.
-          <button v-if="!panelMode" type="button" class="ml-2 text-teal" @click="popOutPanel('recipes')">Pop out to another window</button>
+          Drag the gold title bar, or <strong class="text-mist">Move to other monitor</strong>, to open a real window you can put on a second screen (a dialog cannot leave this Chrome window).
         </p>
         <div v-if="mode!=='architect'" class="mb-3 rounded-lg border border-gold/40 bg-gold/10 px-3 py-2 text-sm text-gold">
           You are in Operator Mode, so recipes are read-only. Click <strong class="text-white">Architect</strong> in the top bar and enter your PIN to add, edit, or delete recipes.
@@ -1013,10 +1017,11 @@
                   </label>
                   <label class="text-[11px] text-mute">Match this PDF value to
                     <select v-model="m.lookup.matchColumnId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
-                      <option value="">—</option>
+                      <option value="">any column (SKU, name…)</option>
                       <option v-for="c in lookupColumns(m.lookup.tableId)" :key="c.id" :value="c.id">{{ c.name }}</option>
                     </select>
                   </label>
+                  <p v-if="lookupMatchHint(m)" class="sm:col-span-2 text-[11px] text-gold">{{ lookupMatchHint(m) }}</p>
                   <label class="text-[11px] text-mute">How to match
                     <select v-model="m.lookup.match" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
                       <option value="contains">contains (REMA ≈ REMA Grønt)</option>
@@ -1284,7 +1289,7 @@
         <div class="flex-1 min-h-0 bg-ink-900">
           <iframe v-if="readerDoc.kind==='pdf'" :key="'reader-'+pdfViewerSrc" :src="pdfViewerSrc" class="w-full h-full bg-white" title="PDF reader"></iframe>
           <div v-else-if="readerDoc.kind==='image'" class="h-full overflow-auto grid place-items-center bg-ink-950 p-6">
-            <img :src="readerDoc.url" :alt="readerDoc.name" class="max-w-none shadow-panel" :style="{ transform: 'scale(' + imgZoom + ')', transformOrigin: 'center top' }" />
+            <img :src="readerDoc.preview || readerDoc.url" :alt="readerDoc.name" class="max-w-none shadow-panel" :style="{ transform: 'scale(' + imgZoom + ')', transformOrigin: 'center top' }" />
           </div>
           <pre v-else class="h-full overflow-auto p-6 text-sm font-mono leading-relaxed whitespace-pre-wrap">{{ readerDoc.text }}</pre>
         </div>
@@ -2692,7 +2697,7 @@
       if (isLinkCol(col)) return findTable(store, col.link && col.link.tableId);
       const n = String(col.name || '').toLowerCase();
       const tables = store.tables || [];
-      if (/product|sku|item|vare/.test(n) && !/qty|qty|antal/.test(n)) return tables.find((t) => /product|vare/i.test(t.name)) || null;
+      if (/product|sku|item|vare/.test(n) && !/qty|antal/.test(n)) return tables.find((t) => /product|vare/i.test(t.name)) || null;
       if (/customer|kunde|client/.test(n) && !/ref|po|ordre|order/.test(n)) return tables.find((t) => /customer|kunde/i.test(t.name)) || null;
       return null;
     }
@@ -2703,20 +2708,31 @@
       return col ? formatDisplay(store, table, rec, col) : '';
     }
 
+    function skuLikeColumns(table) {
+      return ((table && table.columns) || []).filter((c) => {
+        const n = c.name || '';
+        if (/name|navn|title/i.test(n) && !/cod|sku|ean/i.test(n)) return false;
+        return /sku|item\s*no|item\s*#|varenr|ean|barcode|product\s*cod|customer\s*product|product\s*id|^code$/i.test(n);
+      });
+    }
+
+    function rowMatchesLookupCol(store, table, rec, col, needle, mode) {
+      if (!col) return false;
+      const shown = formatDisplay(store, table, rec, col);
+      const stored = rawStored(rec, col);
+      return recipeTextMatch(needle, shown, mode) || recipeTextMatch(needle, stored, mode) || valuesEqualNeedle(needle, shown, stored);
+    }
+
     function findRecipeLookupRow(store, field, raw) {
       if (!field || (field.fill && field.fill !== 'lookup') || !field.lookup || !field.lookup.tableId) return null;
       const table = findTable(store, field.lookup.tableId);
       if (!table) return null;
       const needle = String(raw == null ? '' : raw).trim();
-      const matchCol = findColumn(table, field.lookup.matchColumnId);
+      if (!needle) return null;
       const mode = field.lookup.match || 'contains';
+      const matchCol = findColumn(table, field.lookup.matchColumnId);
       if (matchCol) {
-        const hit = table.records.find((r) => {
-          const shown = formatDisplay(store, table, r, matchCol);
-          const stored = rawStored(r, matchCol);
-          return recipeTextMatch(needle, shown, mode) || recipeTextMatch(needle, stored, mode) || valuesEqualNeedle(needle, shown, stored);
-        });
-        if (hit) return hit;
+        return table.records.find((r) => rowMatchesLookupCol(store, table, r, matchCol, needle, mode)) || null;
       }
       return scanTableForNeedle(store, table, needle);
     }
@@ -2775,6 +2791,17 @@
       let val = resolveRecipeFill(store, field, raw);
       if (col && isLinkCol(col)) val = matchLinkedRecord(store, col, val);
       return val;
+    }
+
+    function recipeLookupFailMessage(store, col, map, raw) {
+      const needle = String(raw == null ? '' : raw).trim();
+      const table = map && map.lookup && findTable(store, map.lookup.tableId);
+      const matchCol = table && findColumn(table, map.lookup.matchColumnId);
+      if (table && matchCol) {
+        return (col && col.name ? col.name : 'Cell') + ': no row on “' + table.name + '” where “' + matchCol.name + '” is “' + needle + '”.';
+      }
+      if (table) return (col && col.name ? col.name : 'Cell') + ': no match for “' + needle + '” on “' + table.name + '”.';
+      return (col && col.name ? col.name : 'Cell') + ': no match for “' + needle + '”.';
     }
 
     function guessTransform(s) {
@@ -2954,6 +2981,16 @@
       return s || 'Sheet';
     }
 
+    function blobToDataUrl(blob) {
+      return new Promise((resolve, reject) => {
+        if (!blob) return reject(new Error('no file'));
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(r.error || new Error('read failed'));
+        r.readAsDataURL(blob);
+      });
+    }
+
     function kindOf(file) {
       const n = (file.name || '').toLowerCase();
       const t = file.type || '';
@@ -3100,14 +3137,51 @@
     };
 
     const ModalFrame = {
-      props: { title: String, wide: Boolean, page: Boolean },
-      emits: ['close'],
+      props: { title: String, wide: Boolean, page: Boolean, detachable: Boolean },
+      emits: ['close', 'detach'],
+      data() { return { pos: { x: 0, y: 0 }, start: null }; },
+      computed: {
+        boxStyle() {
+          if (this.page) return {};
+          if (!this.pos.x && !this.pos.y) return {};
+          return { transform: 'translate(' + this.pos.x + 'px,' + this.pos.y + 'px)' };
+        }
+      },
+      methods: {
+        startTear(e) {
+          if (!this.detachable || this.page || e.button !== 0) return;
+          if (e.target.closest && e.target.closest('button')) return;
+          e.preventDefault();
+          this.start = { x: e.clientX, y: e.clientY, px: this.pos.x, py: this.pos.y };
+          window.addEventListener('mousemove', this.onTearMove);
+          window.addEventListener('mouseup', this.endTear);
+        },
+        onTearMove(e) {
+          if (!this.start) return;
+          const dx = e.clientX - this.start.x;
+          const dy = e.clientY - this.start.y;
+          this.pos = { x: this.start.px + dx, y: this.start.py + dy };
+          if (Math.hypot(dx, dy) > 88) {
+            this.endTear();
+            this.$emit('detach');
+          }
+        },
+        endTear() {
+          this.start = null;
+          window.removeEventListener('mousemove', this.onTearMove);
+          window.removeEventListener('mouseup', this.endTear);
+        }
+      },
+      unmounted() { this.endTear(); },
       template: `
         <div :class="page ? 'flex-1 min-h-0 flex flex-col bg-ink-900' : 'fixed inset-0 z-[70] flex items-start justify-center p-4 md:p-8 bg-black/55'" @click.self="page ? undefined : $emit('close')">
-          <div class="w-full border border-line bg-ink-850 shadow-panel flex flex-col min-h-0" :class="page ? 'flex-1 rounded-none border-0 shadow-none' : (wide ? 'max-w-3xl rounded-2xl' : 'max-w-lg rounded-2xl')" @click.stop>
-            <div class="px-4 py-3 border-b border-line flex items-center justify-between shrink-0">
-              <h3 class="font-semibold">{{ title }}</h3>
-              <button class="text-mute hover:text-white" @click="$emit('close')"><icon name="x" /></button>
+          <div class="w-full border border-line bg-ink-850 shadow-panel flex flex-col min-h-0" :class="page ? 'flex-1 rounded-none border-0 shadow-none' : (wide ? 'max-w-3xl rounded-2xl' : 'max-w-lg rounded-2xl')" :style="boxStyle" @click.stop>
+            <div class="px-4 py-3 border-b border-line flex items-center justify-between shrink-0 gap-2" :class="detachable && !page && 'tear-bar'" @mousedown="startTear">
+              <h3 class="font-semibold min-w-0 truncate">{{ title }}</h3>
+              <div class="flex items-center gap-1 shrink-0">
+                <button v-if="detachable && !page" type="button" class="text-[11px] rounded-md bg-gold text-ink-900 font-semibold px-2 py-1" @click="$emit('detach')" title="Opens a real Chrome window you can drag onto another monitor">Move to other monitor</button>
+                <button class="text-mute hover:text-white" @click="$emit('close')"><icon name="x" /></button>
+              </div>
             </div>
             <div class="p-4 overflow-y-auto" :class="page ? 'flex-1 min-h-0' : 'max-h-[min(72vh,560px)]'"><slot /></div>
           </div>
@@ -3535,6 +3609,25 @@
         </div>`
     };
 
+    function yieldUi() {
+      return new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    function openPdfDocument(spec) {
+      const lib = window.pdfjsLib;
+      if (!lib) return Promise.reject(new Error('pdf.js missing'));
+      const src = Object.assign({ isEvalSupported: false }, spec);
+      const task = lib.getDocument(src);
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          try { task.destroy(); } catch (e) {}
+          reject(new Error('PDF timed out'));
+        }, 20000);
+      });
+      return Promise.race([task.promise, timeout]).finally(() => clearTimeout(timer));
+    }
+
     if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
       window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
     }
@@ -3630,7 +3723,7 @@
           recipeHint: '',
           recipePreview: '',
           recipeTeach: { active: false, colId: '', line: false },
-          pdfView: { pages: [], src: '' }
+          pdfView: { pages: [], src: '', error: '' }
         };
       },
       computed: {
@@ -3912,11 +4005,27 @@
           return t ? t.columns : [];
         },
         readerDoc() { return this.attachPreview || this.activeDoc; },
+        docPreviewSrc() {
+          const d = this.activeDoc;
+          if (!d) return '';
+          return d.url || d.preview || '';
+        },
+        pdfFrameSrc() {
+          const d = this.activeDoc;
+          if (!d || d.kind !== 'pdf' || !d.url) return '';
+          return d.url + '#toolbar=0&navpanes=0&scrollbar=1&view=FitH';
+        },
+        pdfClickReady() {
+          return !!(this.recipeTeach.active && this.pdfView.pages && this.pdfView.pages.length);
+        },
         pdfViewerSrc() {
           const d = this.readerDoc;
-          if (!d || d.kind !== 'pdf' || !d.url) return '';
+          if (!d || d.kind !== 'pdf') return '';
+          const src = d.preview || d.url;
+          if (!src) return '';
           const z = this.pdfZoom || 'page-width';
-          return d.url + '#toolbar=1&navpanes=0&scrollbar=1&view=FitH&zoom=' + encodeURIComponent(z);
+          if (String(src).indexOf('data:') === 0) return src;
+          return src + '#toolbar=1&navpanes=0&scrollbar=1&view=FitH&zoom=' + encodeURIComponent(z);
         },
         splitPaneStyle() {
           if (this.panelMode === 'docs') return { width: '100%', flex: '1 1 auto', height: '100%' };
@@ -3952,8 +4061,10 @@
           this.$nextTick(() => this.bindSheet());
         },
         activeDoc(doc) {
-          if (doc && doc.kind === 'pdf' && doc.url) this.loadPdfView(doc);
-          else this.pdfView = { pages: [], src: '' };
+          if (doc && doc.kind === 'image') this.hydratePreview(doc);
+          if (doc && doc.kind === 'pdf' && this.recipeTeach.active) {
+            setTimeout(() => this.loadPdfView(doc), 250);
+          } else if (!(doc && doc.kind === 'pdf')) this.pdfView = { pages: [], src: '', error: '' };
           this.sendUndockPdf();
         },
         recipeTeach: {
@@ -3961,7 +4072,11 @@
           handler(v) {
             if (this._remoteTeach) return;
             this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, line: v.line } });
+            if (v && v.active && this.activeDoc && this.activeDoc.kind === 'pdf') setTimeout(() => this.loadPdfView(this.activeDoc), 250);
           }
+        },
+        docsPaneVisible(v) {
+          if (v && this.activeDoc && this.activeDoc.kind === 'pdf') this.$nextTick(() => this.paintPdfCanvases());
         }
       },
       methods: {
@@ -6299,14 +6414,37 @@
         rememberUndock() {
           try { sessionStorage.setItem(UNDOCK_SESSION, JSON.stringify(this.undocked)); } catch (e) {}
         },
+        startDocsTear(e) {
+          if (this.panelMode || e.button !== 0) return;
+          if (e.target.closest && e.target.closest('button,label,input,select')) return;
+          const x0 = e.clientX, y0 = e.clientY;
+          const move = (ev) => {
+            if (Math.hypot(ev.clientX - x0, ev.clientY - y0) > 72) {
+              window.removeEventListener('mousemove', move);
+              window.removeEventListener('mouseup', up);
+              this.popOutPanel('docs');
+            }
+          };
+          const up = () => {
+            window.removeEventListener('mousemove', move);
+            window.removeEventListener('mouseup', up);
+          };
+          window.addEventListener('mousemove', move);
+          window.addEventListener('mouseup', up);
+        },
         popOutPanel(name) {
           const u = new URL(location.href);
           u.searchParams.set('panel', name);
-          const feat = name === 'docs'
-            ? 'popup=yes,width=980,height=1200,left=60,top=30'
-            : 'popup=yes,width=920,height=1000,left=100,top=50';
-          const w = window.open(u.toString(), 'forgegrid-' + name, feat);
-          if (!w) return this.toast('Allow pop-ups so the panel can open on another monitor.', 'warn');
+          const wSize = name === 'docs' ? 980 : 920;
+          const hSize = name === 'docs' ? 1100 : 980;
+          const left = Math.round((window.screenX || window.screenLeft || 0) + Math.max(80, (window.outerWidth || 900) * 0.55));
+          const top = Math.round((window.screenY || window.screenTop || 0) + 48);
+          const feat = 'popup=true,resizable=yes,scrollbars=yes,width=' + wSize + ',height=' + hSize + ',left=' + left + ',top=' + top;
+          const w = window.open(u.toString(), 'fg_' + name + '_' + Date.now(), feat);
+          if (!w) {
+            return this.toast('Allow pop-ups for this site. Chrome will not let a dialog be dragged onto another monitor — it must open as its own window.', 'warn');
+          }
+          try { w.focus(); } catch (e) {}
           this.popouts[name] = w;
           this.undocked[name] = true;
           this.rememberUndock();
@@ -6315,7 +6453,7 @@
             this.docReaderOpen = false;
           }
           if (name === 'recipes') this.recipeOpen = false;
-          this.toast('Drag that window onto another monitor. Clicks on the PDF still map here.');
+          this.toast('Drag that new window’s title bar onto the other monitor.');
           setTimeout(() => this.sendUndockPdf(), 400);
         },
         dockPanel(name) {
@@ -6490,14 +6628,17 @@
           this.view = 'form';
         },
         async showAttachmentDoc(meta, url, kind, text) {
+          const blob = (attachmentBlobs.get(meta.id) || {}).blob;
           let doc = this.docs.find((d) => d.attachId === meta.id);
           if (!doc) {
-            doc = { id: uid('doc'), attachId: meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: text || '' };
+            doc = { id: uid('doc'), attachId: meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: text || '', file: blob || null };
             this.docs.push(doc);
           } else {
             doc.url = url; doc.kind = kind; doc.text = text || doc.text || ''; doc.name = meta.name;
+            if (blob) doc.file = blob;
           }
           this.activeDocId = doc.id;
+          this.hydratePreview(doc);
           if (this.undocked.docs) this.sendUndockPdf();
           else this.splitOpen = true;
           this.docReaderOpen = false;
@@ -6543,7 +6684,7 @@
         async addFile(file) {
           const kind = kindOf(file);
           const url = URL.createObjectURL(file);
-          const doc = { id: uid('doc'), name: file.name, size: file.size, type: file.type, kind, url, text: '', file: asRaw(file) };
+          const doc = { id: uid('doc'), name: file.name, size: file.size, type: file.type, kind, url, text: '', file: asRaw(file), preview: '' };
           if (kind === 'text') doc.text = await file.text();
           this.docs.push(doc);
           this.activeDocId = doc.id;
@@ -6551,61 +6692,74 @@
           this.pdfZoom = 'page-width';
           if (kind === 'pdf' && this.splitWidth < 52) this.splitWidth = 52;
           this.audit('document.open', file.name, kind);
-          this.recipeHint = 'Reading document…';
+          this.recipeHint = 'Opened ' + file.name + '.';
+          if (kind === 'image') this.hydratePreview(doc);
+          const later = window.requestIdleCallback || ((fn) => setTimeout(fn, 400));
+          later(() => {
+            this.readDocText(doc).then((t) => {
+              doc.text = t;
+              this.afterDocText(doc);
+            }).catch(() => {
+              this.recipeHint = 'Could not read text from this file. You can still map a recipe after pasting text, or try a clearer PDF.';
+            });
+          });
+        },
+        async hydratePreview(doc) {
+          if (!doc) return;
+          if (!doc.url && doc.file) doc.url = URL.createObjectURL(doc.file);
+          if (doc.kind === 'pdf') return;
+          if (doc.preview || !doc.file) return;
           try {
-            doc.text = await this.readDocText(doc);
-            this.afterDocText(doc);
-          } catch (e) {
-            this.recipeHint = 'Could not read text from this file. You can still map a recipe after pasting text, or try a clearer PDF.';
-          }
+            doc.preview = await blobToDataUrl(doc.file);
+          } catch (e) {}
         },
         async readDocText(doc) {
           if (!doc) return '';
           if (doc.kind === 'text') return doc.text || (doc.file ? await doc.file.text() : '');
-          if (doc.kind === 'pdf') return this.extractPdfText(doc.url, doc.file);
+          if (doc.kind === 'pdf') {
+            if (doc.url) {
+              const pdf = await openPdfDocument({ url: doc.url });
+              return this.extractPdfTextFromPdf(pdf);
+            }
+            const data = await this.pdfBytes(doc);
+            const pdf = await openPdfDocument({ data });
+            return this.extractPdfTextFromPdf(pdf);
+          }
           if (doc.kind === 'image') return '';
           return doc.text || '';
         },
-        async getPdfDocument(url, file) {
-          if (!window.pdfjsLib) throw new Error('pdf.js missing');
-          if (url && this._pdfDocUrl === url && this._pdfDoc) return this._pdfDoc;
-          if (url && this._pdfDocUrl === url && this._pdfDocPromise) return this._pdfDocPromise;
-          if (this._pdfLoadingTask && this._pdfDocUrl && this._pdfDocUrl !== url) {
-            try { this._pdfLoadingTask.destroy(); } catch (e) { /* ignore */ }
-            this._pdfLoadingTask = null;
-            this._pdfDoc = null;
-            this._pdfDocPromise = null;
+        async pdfBytes(doc) {
+          if (doc && doc.file) return new Uint8Array(await doc.file.arrayBuffer());
+          const url = doc && doc.url;
+          if (!url) throw new Error('no pdf');
+          try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('pdf fetch');
+            return new Uint8Array(await res.arrayBuffer());
+          } catch (e) {
+            if (doc.file) return new Uint8Array(await doc.file.arrayBuffer());
+            throw e;
           }
-          this._pdfDocUrl = url || ('file:' + (file && file.name) || 'pdf');
-          const open = async () => {
-            let task = null;
-            if (url) {
-              try {
-                task = window.pdfjsLib.getDocument({ url, withCredentials: false });
-                this._pdfLoadingTask = task;
-                return asRaw(await task.promise);
-              } catch (e) { /* fall through to bytes */ }
-            }
-            if (file) {
-              const buf = await file.arrayBuffer();
-              task = window.pdfjsLib.getDocument({ data: new Uint8Array(buf) });
-              this._pdfLoadingTask = task;
-              return asRaw(await task.promise);
-            }
-            throw new Error('pdf.js missing');
-          };
-          this._pdfDocPromise = open().then((pdf) => {
-            this._pdfDoc = pdf;
-            return pdf;
-          });
-          return this._pdfDocPromise;
         },
-        async extractPdfText(url, file) {
+        async extractPdfText(url) {
           if (!window.pdfjsLib) throw new Error('pdf.js missing');
-          const pdf = await this.getPdfDocument(url, file);
+          let data;
+          try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('pdf fetch');
+            data = new Uint8Array(await res.arrayBuffer());
+          } catch (e) {
+            const pdf = await openPdfDocument({ url, withCredentials: false });
+            return this.extractPdfTextFromPdf(pdf);
+          }
+          const pdf = await openPdfDocument({ data });
+          return this.extractPdfTextFromPdf(pdf);
+        },
+        async extractPdfTextFromPdf(pdf) {
           const parts = [];
           for (let i = 1; i <= pdf.numPages; i++) {
-            const page = asRaw(await pdf.getPage(i));
+            await yieldUi();
+            const page = await pdf.getPage(i);
             const content = await page.getTextContent();
             let line = '';
             let lastY = null;
@@ -6778,7 +6932,7 @@
           const hintTable = tableForColumnHint(this.store, mapCol);
           if (isLinkCol(mapCol) && mapCol.link) {
             const lt = findTable(this.store, mapCol.link.tableId);
-            const skuCol = lt && /^\d+$/.test(sample) && (lt.columns || []).find((c) => /sku|item\s*no|ean|varenr|code/i.test(c.name));
+            const skuCol = lt && /^\d+$/.test(sample) && skuLikeColumns(lt)[0];
             map.lookup = {
               tableId: mapCol.link.tableId,
               matchColumnId: (skuCol && skuCol.id) || mapCol.link.searchColumnId || mapCol.link.matchColumnId || mapCol.link.displayColumnId,
@@ -6788,7 +6942,7 @@
             };
             map.fill = 'lookup';
           } else if (hintTable && /product|customer|sku|item/i.test(mapCol.name || '')) {
-            const skuCol = /^\d+$/.test(sample) && (hintTable.columns || []).find((c) => /sku|item\s*no|ean|varenr|code/i.test(c.name));
+            const skuCol = /^\d+$/.test(sample) && skuLikeColumns(hintTable)[0];
             const nameCol = (hintTable.columns || []).find((c) => /name|navn/i.test(c.name));
             map.fill = 'lookup';
             map.lookup = {
@@ -6810,83 +6964,87 @@
           this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
           this.toast('Mapped ' + sample + ' → column.');
         },
-        cancelPdfRenders() {
-          const tasks = this._pdfRenderTasks || [];
-          tasks.forEach((t) => { try { t.cancel(); } catch (e) { /* ignore */ } });
-          this._pdfRenderTasks = [];
-        },
-        async paintPdfPages(token) {
-          await this.$nextTick();
-          if (token !== this._pdfLoad) return;
-          const root = this.$refs.pdfScroll;
-          const gfx = this._pdfGfx || {};
-          const pages = (this.pdfView && this.pdfView.pages) || [];
-          this.cancelPdfRenders();
-          for (let i = 0; i < pages.length; i++) {
-            if (token !== this._pdfLoad) return;
-            const pg = pages[i];
-            const raw = gfx[pg.num];
-            if (!raw || !root) continue;
-            const canvas = root.querySelector('[data-pdf-page="' + pg.num + '"]');
-            if (!canvas) continue;
-            const ctx = canvas.getContext('2d');
-            try {
-              const task = raw.page.render({ canvasContext: ctx, viewport: raw.viewport });
-              this._pdfRenderTasks.push(task);
-              await task.promise;
-            } catch (e) {
-              if (e && e.name === 'RenderingCancelledException') return;
-            }
+        async parsePdfPages(doc) {
+          if (!doc || !window.pdfjsLib) return [];
+          if (doc._pdfPages && doc._pdfPages.length) return doc._pdfPages;
+          await yieldUi();
+          const pdf = doc.url
+            ? await openPdfDocument({ url: doc.url })
+            : await openPdfDocument({ data: await this.pdfBytes(doc) });
+          const pages = [];
+          for (let p = 1; p <= pdf.numPages; p++) {
+            await yieldUi();
+            const page = asRaw(await pdf.getPage(p));
+            const viewport = asRaw(page.getViewport({ scale: 1.35 }));
+            const content = await page.getTextContent();
+            const mapped = content.items.filter((it) => it.str && String(it.str).trim()).map((it) => {
+              const r = pdfItemRect(it, viewport);
+              return sanitizePdfItem({
+                str: it.str,
+                nx: r.x / viewport.width,
+                ny: r.y / viewport.height,
+                nw: r.w / viewport.width,
+                nh: r.h / viewport.height
+              });
+            });
+            const items = this.recipeTeach.active ? explodePdfWords(mapped) : mapped;
+            pages.push({ num: p, width: viewport.width, height: viewport.height, items, viewport, page });
           }
+          doc._pdfPages = pages;
+          return pages;
         },
         async loadPdfView(doc) {
-          if (!doc || (!doc.url && !doc.file) || !window.pdfjsLib) return;
-          if (this.pdfView.src === doc.url && this.pdfView.pages.length) return;
-          if (this._pdfViewPromise && this._pdfViewUrl === doc.url) return this._pdfViewPromise;
+          if (!doc) return;
           this._pdfLoad = (this._pdfLoad || 0) + 1;
           const token = this._pdfLoad;
-          this._pdfViewUrl = doc.url;
-          const run = async () => {
-          this.cancelPdfRenders();
+          const key = doc.id || doc.url || '';
           try {
-            const pdf = await this.getPdfDocument(doc.url, doc.file);
+            if (!doc.url && doc.file) doc.url = URL.createObjectURL(doc.file);
+            const pages = await this.parsePdfPages(doc);
             if (token !== this._pdfLoad) return;
-            const pages = [];
-            const gfx = {};
-            for (let p = 1; p <= pdf.numPages; p++) {
-              const page = asRaw(await pdf.getPage(p));
-              const viewport = asRaw(page.getViewport({ scale: 1.35 }));
-              const content = await page.getTextContent();
-              const items = explodePdfWords(content.items.filter((it) => it.str && String(it.str).trim()).map((it) => {
-                const r = pdfItemRect(it, viewport);
-                return sanitizePdfItem({
-                  str: it.str,
-                  nx: r.x / viewport.width,
-                  ny: r.y / viewport.height,
-                  nw: r.w / viewport.width,
-                  nh: r.h / viewport.height
-                });
-              }));
-              gfx[p] = asRaw({ page, viewport });
-              pages.push({ num: p, width: viewport.width, height: viewport.height, items });
-            }
-            if (token !== this._pdfLoad) return;
-            this._pdfGfx = gfx;
-            this.pdfView = { pages, src: doc.url };
-            await this.paintPdfPages(token);
+            this.pdfView = { pages, src: key, error: '' };
           } catch (e) {
             if (token !== this._pdfLoad) return;
-            this.recipeHint = 'Could not render this PDF for clicking.';
+            this.pdfView = { pages: [], src: key, error: 'Could not parse this PDF. The preview below is the browser viewer.' };
           }
-          };
-          this._pdfViewPromise = run();
-          try { await this._pdfViewPromise; } finally {
-            if (this._pdfViewUrl === doc.url) this._pdfViewPromise = null;
+        },
+        renderPdfCanvas(pg, canvas) {
+          if (!canvas || !pg || !pg.page) return;
+          if (pg._canvas === canvas && pg._drawn) return;
+          pg._canvas = canvas;
+          pg._drawn = false;
+          if (canvas.width !== pg.width) canvas.width = pg.width;
+          if (canvas.height !== pg.height) canvas.height = pg.height;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          const token = (pg._paint = (pg._paint || 0) + 1);
+          if (pg._renderTask) {
+            try { pg._renderTask.cancel(); } catch (e) {}
           }
+          const task = pg.page.render({ canvasContext: ctx, viewport: pg.viewport });
+          pg._renderTask = task;
+          task.promise.then(() => {
+            if (token === pg._paint) pg._drawn = true;
+          }).catch((e) => {
+            if (e && e.name === 'RenderingCancelledException') return;
+            pg._drawn = false;
+          });
+        },
+        paintPdfCanvases() {
+          /* canvases paint via :ref when the Docs pane is actually open */
         },
         lookupColumns(tableId) {
           const t = findTable(this.store, tableId);
           return t ? t.columns : [];
+        },
+        lookupMatchHint(m) {
+          if (!m || !m.lookup) return '';
+          const sample = String(m.sample || '').trim();
+          if (!/^\d{3,}$/.test(sample)) return '';
+          const col = findColumn(findTable(this.store, m.lookup.tableId), m.lookup.matchColumnId);
+          if (!col || !/name|navn|title/i.test(col.name || '') || /cod|sku|ean/i.test(col.name || '')) return '';
+          return 'This mapping matches “' + col.name + '”, not the product code. 306832 will only hit if that name is 306832.';
         },
         ensureRecipeLookup(f) {
           if (!f.lookup) f.lookup = emptyRecipeLookup();
@@ -7002,7 +7160,7 @@
             return;
           }
           const url = hit.url || URL.createObjectURL(blob);
-          const doc = { id: 'att-' + meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: '', file: asRaw(blob) };
+          const doc = { id: 'att-' + meta.id, attachId: meta.id, name: meta.name, size: meta.size, type: meta.type, kind, url, text: '', file: asRaw(blob) };
           this.recipeBusy = true;
           this.recipeHint = 'Reading attached file…';
           try {
@@ -7021,7 +7179,7 @@
               this.activeDocId = existing.id;
               doc.id = existing.id;
             } else {
-              this.docs.push(Object.assign({}, doc, { attachId: meta.id }));
+              this.docs.push(doc);
               this.activeDocId = doc.id;
             }
             await this.applyRecipeFill(recipe, doc, rec, {
@@ -7061,11 +7219,20 @@
           opts = opts || {};
           try {
             if (!doc.text) doc.text = await this.readDocText(doc);
-            if (doc.kind === 'pdf' && (!this.pdfView.pages.length || this.pdfView.src !== doc.url)) await this.loadPdfView(doc);
-            if (doc.kind === 'pdf' && (!this.pdfView.pages.length || this.pdfView.src !== doc.url)) await this.loadPdfView(doc);
+            let mapPages = this.pdfView.pages;
+            if (doc.kind === 'pdf') {
+              mapPages = await this.parsePdfPages(doc);
+              if (this.docsPaneVisible && this.activeDoc && (this.activeDoc.id === doc.id || this.activeDoc.attachId && doc.attachId && this.activeDoc.attachId === doc.attachId)) {
+                this.pdfView = { pages: mapPages, src: doc.id || doc.url };
+                await this.$nextTick();
+              }
+            }
             const extracted = runRecipeExtract(doc.text, recipe);
-            const click = (recipe.maps || []).length && this.pdfView.pages.length ? extractFromMaps(this.pdfView.pages, recipe) : { header: {}, lines: [] };
-            const headerTable = opts.headerTable || (opts.keepView && this.currentTable) || findTable(this.store, recipe.headerTableId) || this.currentTable;
+            const click = (recipe.maps || []).length && mapPages && mapPages.length ? extractFromMaps(mapPages, recipe) : { header: {}, lines: [] };
+            const headerTable = opts.headerTable
+              || (opts.keepView && this.currentTable)
+              || (this.store.tables || []).find((t) => rec && (t.records || []).some((r) => r.id === rec.id))
+              || findTable(this.store, recipe.headerTableId) || this.currentTable;
             if (!headerTable || !rec) {
               this.toast('Pick a header sheet on the recipe.', 'warn');
               this.recipeBusy = false;
@@ -7085,7 +7252,7 @@
               const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
               if (this.recipeWriteCell(headerTable, rec, col, val)) filled += 1;
               else if (col && raw !== '' && raw != null && (isLinkCol(col) || /product|customer|sku/i.test(col.name || ''))) {
-                this.toast(col.name + ': no match for “' + raw + '”. Add that SKU/name on Products/Customers, or set lookup on the click.', 'warn');
+                this.toast(recipeLookupFailMessage(this.store, col, map, raw), 'warn');
               }
               if (map) this.applyRecipeLookupAlso(headerTable, rec, map, raw);
             });
@@ -7413,6 +7580,10 @@
           if (resolveRecipeFill(lkWs, custF, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('customer lookup failed');
           const prodF = remR.lineFields.find((f) => f.columnId === 'col_l_prod');
           if (resolveRecipeFill(lkWs, prodF, '306832') !== 'rec_prod_snaps') console.warn('product sku lookup failed');
+          const productsT = lkWs.tables.find((x) => x.name === 'Products');
+          const prodNameCol = productsT.columns.find((c) => c.name === 'Name');
+          const nameAsKey = { fill: 'lookup', lookup: { tableId: productsT.id, matchColumnId: prodNameCol.id, match: 'equals', out: 'link' } };
+          if (resolveRecipeFill(lkWs, nameAsKey, '306832') !== '') console.warn('lookup must use the chosen Name column, not SKU');
           const fixF = remR.headerFields.find((f) => f.fill === 'fixed');
           if (resolveRecipeFill(lkWs, fixF, '') !== 'Draft') console.warn('fixed recipe fill failed');
           const ord = lkWs.tables.find((x) => x.name === 'Orders');
@@ -7422,6 +7593,16 @@
           const linesT = lkWs.tables.find((x) => x.name === 'Line Items');
           const lineProdCol = linesT.columns.find((c) => c.name === 'Product');
           if (matchLinkedRecord(lkWs, lineProdCol, '306832') !== 'rec_prod_snaps') console.warn('product SKU link match failed');
+          lkWs.tables.push({
+            id: 'tbl_packed', name: 'Packed Products', groupId: productsT.groupId, columns: [
+              { id: 'pp_name', name: 'Packed Product Name', type: 'text' },
+              { id: 'pp_code', name: 'Customer Product Code', type: 'text' }
+            ], records: [{ id: 'rec_packed_flow', createdAt: Date.now(), updatedAt: Date.now(), data: { pp_name: '125g flowbag', pp_code: '888777' } }]
+          });
+          const packedWrong = { fill: 'lookup', lookup: { tableId: productsT.id, matchColumnId: prodNameCol.id, match: 'equals', out: 'link' } };
+          if (resolveRecipeFill(lkWs, packedWrong, '888777') !== '') console.warn('must not search Packed Products when Look in sheet is Products');
+          const packedRight = { fill: 'lookup', lookup: { tableId: 'tbl_packed', matchColumnId: 'pp_code', match: 'equals', out: 'link' } };
+          if (resolveRecipeFill(lkWs, packedRight, '888777') !== 'rec_packed_flow') console.warn('chosen Packed Products + Customer Product Code should match');
           const fakeProd = { name: 'Product', type: 'text' };
           if (String(coerceRecipeCell(lkWs, fakeProd, { fill: 'pdf' }, '306832')) !== '306832') console.warn('text Product should keep the mapped SKU');
           const spec = snapshotCellRule(cust2.records[0], city2);
