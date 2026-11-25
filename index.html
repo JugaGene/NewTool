@@ -285,6 +285,10 @@
           ending with
           <input v-model.trim="recipeDraft.lineSkip.rules[0].value" class="w-14 rounded-md bg-ink-900 text-mist px-1 py-0.5 font-mono" placeholder="15" @change="saveRecipe" />
         </span>
+        <label v-if="recipeTeach.line && recipeDraft.lineUnique" class="inline-flex items-center gap-1 text-[12px]">
+          <input type="checkbox" v-model="recipeDraft.lineUnique.enabled" class="accent-ink-900" @change="saveRecipe" />
+          One row per unique product
+        </label>
         <span class="opacity-80">{{ teachHintText }}</span>
         <button v-if="!panelMode && !undocked.docs" class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="popOutPanel('docs')">Move to other monitor</button>
         <button class="ml-auto rounded-md bg-ink-900 text-gold px-2 py-1 text-[12px] font-semibold" @click="saveRecipe">Save recipe</button>
@@ -1149,6 +1153,17 @@
                 </div>
                 <button v-if="mode==='architect'" type="button" class="text-[12px] text-teal" @click="addLineSkipRule">+ Skip rule</button>
               </div>
+              <label class="flex items-center gap-2 text-sm">
+                <input type="checkbox" class="accent-teal" v-model="recipeDraft.lineUnique.enabled" :disabled="mode!=='architect'" />
+                One Line Items row per unique product number
+              </label>
+              <p class="text-[11px] text-mute">You do not click every SKU. Map Item No, Qty, and Price once on the first product line. Upload then creates one row for 306810, one for 306806, one for 306805 — 379015 is skipped, and a repeated number is not duplicated.</p>
+              <label v-if="recipeDraft.lineUnique && recipeDraft.lineUnique.enabled" class="text-[11px] text-mute block">Unique key column
+                <select v-model="recipeDraft.lineUnique.columnId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-2 py-1 text-[12px] text-mist" :disabled="mode!=='architect'">
+                  <option value="">product number on the line</option>
+                  <option v-for="c in recipeLineColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
+                </select>
+              </label>
             </div>
             <label class="block text-sm">Line-item regex (optional)
               <input v-model.trim="recipeDraft.lineRegex" class="mt-1 w-full rounded-lg bg-ink-900 border border-line px-3 py-2 font-mono text-[11px]" placeholder="(\d{6})\s+(.+?)\s+(\d+)\s+(Ks\.|Kolli)\s+([\d.]+,\d{2})" :disabled="mode!=='architect'" />
@@ -1674,6 +1689,7 @@
         if (!Array.isArray(r.maps)) r.maps = [];
         if (r.detect == null) r.detect = '';
         normalizeLineSkip(r);
+        normalizeLineUnique(r);
       });
       return store;
     }
@@ -2668,6 +2684,7 @@
           { id: 'hf_status', label: 'Status', regex: '', group: 1, columnId: o.status, transform: 'text', fill: 'fixed', fixed: 'Draft' }
         ],
         lineSkip: { enabled: true, columnId: l.notes, rules: [{ op: 'endsWith', value: '15' }] },
+        lineUnique: { enabled: true, columnId: l.notes },
         lineRegex: '(\\d{6})\\s+(.+?)\\s+(\\d+)\\s+(Ks\\.|Kolli|Kg|Stk)\\s+([\\d.]+,\\d{2})',
         lineFields: [
           { group: 1, columnId: l.notes, transform: 'text', label: 'Item number', fill: 'pdf' },
@@ -2811,6 +2828,54 @@
       const vals = lineSkipTestValues(recipe, row, extraTokens);
       if (!vals.length) return false;
       return rules.some((rule) => vals.some((v) => lineSkipRuleHits(v, rule)));
+    }
+
+    function emptyLineUnique() {
+      return { enabled: true, columnId: '' };
+    }
+
+    function normalizeLineUnique(recipe) {
+      if (!recipe) return emptyLineUnique();
+      const src = recipe.lineUnique || {};
+      recipe.lineUnique = {
+        enabled: src.enabled == null ? true : !!src.enabled,
+        columnId: src.columnId || ''
+      };
+      return recipe.lineUnique;
+    }
+
+    function lineRowUniqueKey(recipe, row) {
+      if (!row) return '';
+      const uniq = recipe && recipe.lineUnique;
+      const pick = (v) => {
+        const s = lineSkipNeedle(v);
+        if (!s) return '';
+        const compact = s.replace(/[\s.]/g, '');
+        return /^\d{4,}$/.test(compact) ? compact : s.toLowerCase();
+      };
+      if (uniq && uniq.columnId && row[uniq.columnId] != null && row[uniq.columnId] !== '') {
+        return pick(row[uniq.columnId]);
+      }
+      const keys = Object.keys(row);
+      for (let i = 0; i < keys.length; i++) {
+        const k = pick(row[keys[i]]);
+        if (/^\d{4,}$/.test(k)) return k;
+      }
+      return keys.length ? pick(row[keys[0]]) : '';
+    }
+
+    function uniqueRecipeLines(recipe, lines) {
+      const uniq = recipe && recipe.lineUnique;
+      if (!uniq || !uniq.enabled || !lines || !lines.length) return lines || [];
+      const seen = {};
+      const out = [];
+      lines.forEach((row) => {
+        const key = lineRowUniqueKey(recipe, row);
+        if (key && seen[key]) return;
+        if (key) seen[key] = true;
+        out.push(row);
+      });
+      return out;
     }
 
     function itemsOnPdfLine(items, y, tol) {
@@ -3318,7 +3383,7 @@
           lines.push(row);
         });
       }
-      return { header, lines };
+      return { header, lines: uniqueRecipeLines(recipe, lines) };
     }
 
     function runRecipeExtract(text, recipe) {
@@ -3337,7 +3402,7 @@
         if (recipeLineSkipped(recipe, data, extras)) return;
         lines.push(data);
       });
-      return { header, lines };
+      return { header, lines: uniqueRecipeLines(recipe, lines) };
     }
 
     function sanitizeSheetName(name) {
@@ -4425,7 +4490,7 @@
             if (this.recipeTeach.colId) {
               return 'Click that value on the first product line only (not the Europool row). Qty and price on later products are read from the same columns.';
             }
-            return 'Keep Repeats on. Map Item No, then Qty, then Price — always on the first product line. Each PDF product row becomes its own Line Items row with that row’s quantity.';
+            return 'Keep Repeats on. Map Item No, Qty, and Price once on the first product line. Upload creates one Line Items row per unique product (crates skipped).';
           }
           if (this.recipeTeach.colId) {
             return this.undocked.docs || this.panelMode === 'docs'
@@ -7260,7 +7325,8 @@
             lineRegex: '',
             lineFields: [],
             maps: [],
-            lineSkip: emptyLineSkip()
+            lineSkip: emptyLineSkip(),
+            lineUnique: emptyLineUnique()
           };
         },
         newRecipe() { this.recipeDraft = this.freshRecipe(); },
@@ -7273,6 +7339,7 @@
           this.recipeDraft = clone(r);
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
           normalizeLineSkip(this.recipeDraft);
+          normalizeLineUnique(this.recipeDraft);
           (this.recipeDraft.headerFields || []).forEach((f) => {
             if (!f.fill) f.fill = 'pdf';
             if (!f.lookup) f.lookup = emptyRecipeLookup();
@@ -7303,6 +7370,7 @@
           if (!this.recipeDraft.id) return;
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
           normalizeLineSkip(this.recipeDraft);
+          normalizeLineUnique(this.recipeDraft);
           this.saveRecipe();
           if (this.panelMode !== 'recipes') this.recipeOpen = false;
           if (!this.undocked.docs && this.panelMode !== 'docs') this.splitOpen = true;
@@ -7334,6 +7402,7 @@
         onTeachLineToggle() {
           this.recipeTeach.colId = '';
           normalizeLineSkip(this.recipeDraft);
+          normalizeLineUnique(this.recipeDraft);
           if (this.recipeTeach.line) {
             const lt = findTable(this.store, this.recipeDraft.lineTableId);
             if (lt) {
@@ -8114,6 +8183,9 @@
           if (multi.lines.length !== 3) console.warn('KO421268-style lines should be 3 products, not crates', multi.lines);
           const nos = multi.lines.map((row) => String(row.col_l_notes));
           if (nos.join(',') !== '306810,306806,306805') console.warn('product numbers order failed', nos);
+          const dupTxt = multiTxt + '\n306810 Ærter Danske 500gr. 360 Ks. 115,00 41.400,00';
+          const deduped = runRecipeExtract(dupTxt, remR);
+          if (deduped.lines.length !== 3) console.warn('unique product numbers should not duplicate', deduped.lines);
           const crateOn = { ...emptyLineSkip(), enabled: true, rules: [{ op: 'endsWith', value: '15' }] };
           if (!recipeLineSkipped({ lineSkip: crateOn }, { sku: '379015' })) console.warn('endsWith 15 skip failed');
           if (recipeLineSkipped({ lineSkip: crateOn }, { sku: '306810' })) console.warn('306810 should not skip');
