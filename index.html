@@ -268,14 +268,14 @@
       <div v-if="recipeTeach.active" class="shrink-0 bg-gold text-ink-900 px-3 py-2 text-[13px] flex flex-wrap items-center gap-2 relative z-30">
         <span class="font-semibold">Teaching {{ (recipeDraft && recipeDraft.name) || 'recipe' }}</span>
         <label class="inline-flex items-center gap-1 text-[12px]">Column
-          <select v-model="recipeTeach.colId" class="rounded-md bg-ink-900 text-mist px-2 py-1" @change="onTeachColChange">
+          <select v-model="recipeTeach.pick" class="rounded-md bg-ink-900 text-mist px-2 py-1" @change="onTeachColChange">
             <option value="">Pick a column…</option>
-            <option v-for="c in teachColumns" :key="c.id" :value="c.id">{{ c.name }}</option>
+            <option v-for="c in teachColumns" :key="(c.teachRole || 'header') + ':' + c.id" :value="(c.teachRole || 'header') + ':' + c.id">{{ c.teachLabel || c.name }}</option>
           </select>
         </label>
         <label class="inline-flex items-center gap-1 text-[12px]">
           <input type="checkbox" v-model="recipeTeach.line" class="accent-ink-900" @change="onTeachLineToggle" />
-          Repeats on each line
+          Several products (line items)
         </label>
         <label v-if="recipeTeach.line && recipeDraft.lineSkip" class="inline-flex items-center gap-1 text-[12px]">
           <input type="checkbox" v-model="recipeDraft.lineSkip.enabled" class="accent-ink-900" @change="saveRecipe" />
@@ -1157,7 +1157,7 @@
                 <input type="checkbox" class="accent-teal" v-model="recipeDraft.lineUnique.enabled" :disabled="mode!=='architect'" />
                 One Line Items row per unique product number
               </label>
-              <p class="text-[11px] text-mute">You do not click every SKU. Map Item No, Qty, and Price once on the first product line. Upload then creates one row for 306810, one for 306806, one for 306805 — 379015 is skipped, and a repeated number is not duplicated.</p>
+              <p class="text-[11px] text-mute">Clicks on this PDF only teach the column. The next købsordre can list different products in a different order — Fill still creates one row per unique number in that column (crates ending in 15 skipped).</p>
               <label v-if="recipeDraft.lineUnique && recipeDraft.lineUnique.enabled" class="text-[11px] text-mute block">Unique key column
                 <select v-model="recipeDraft.lineUnique.columnId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-2 py-1 text-[12px] text-mist" :disabled="mode!=='architect'">
                   <option value="">product number on the line</option>
@@ -2877,7 +2877,27 @@
 
     function samePdfColumn(a, b) {
       if (!a || !b) return false;
-      return Math.abs((a.nx + (a.nw || 0) / 2) - (b.nx + (b.nw || 0) / 2)) < 0.05;
+      return Math.abs((a.nx + (a.nw || 0) / 2) - (b.nx + (b.nw || 0) / 2)) < 0.08;
+    }
+
+    function skuLikeSample(s) {
+      return /^\d{4,}$/.test(String(s == null ? '' : s).replace(/[\s.]/g, ''));
+    }
+
+    function ensureRecipeLineTable(store, recipe) {
+      if (!store || !recipe) return null;
+      let t = findTable(store, recipe.lineTableId);
+      if (t) return t;
+      t = (store.tables || []).find((x) => /line\s*item/i.test(x.name || ''))
+        || (store.tables || []).find((x) => /^lines$/i.test(x.name || ''))
+        || (store.tables || []).find((x) => /line/i.test(x.name || '') && !/deadline|outline/i.test(x.name || ''));
+      if (!t) return null;
+      recipe.lineTableId = t.id;
+      if (!recipe.lineLinkColumnId) {
+        const link = (t.columns || []).find((c) => c.type === 'link' || c.type === 'search');
+        if (link) recipe.lineLinkColumnId = link.id;
+      }
+      return t;
     }
 
     function uniqueRecipeLines(recipe, lines) {
@@ -3364,15 +3384,21 @@
       const lineMaps = maps.filter((m) => m.role === 'line');
       const lines = [];
       if (lineMaps.length) {
-        const skuMap = lineMaps.find((m) => /^\d{4,}$/.test(String(m.sample || '').replace(/[\s.]/g, '')));
+        const skuMap = lineMaps.find((m) => skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c.sample)));
         const m0 = skuMap || lineMaps[0];
         const page = pages[(m0.page || 1) - 1];
         const items = (page && page.items) || [];
         const cx0 = m0.nx + m0.nw / 2;
         const sample = String(m0.sample || '').trim();
-        const skuAnchor = /^\d{4,}$/.test(sample.replace(/[\s.]/g, ''));
-        let hits = items.filter((it) => Math.abs((it.nx + it.nw / 2) - cx0) < 0.04 && String(it.str).trim());
-        if (skuAnchor) hits = hits.filter((it) => /^\d{4,}$/.test(String(it.str || '').replace(/[\s.]/g, '')));
+        const skuAnchor = skuLikeSample(sample) || (m0.choices || []).some((c) => skuLikeSample(c.sample));
+        let hits = items.filter((it) => Math.abs((it.nx + it.nw / 2) - cx0) < 0.08 && String(it.str).trim());
+        if (skuAnchor) hits = hits.filter((it) => skuLikeSample(it.str));
+        (m0.choices || []).forEach((c) => {
+          const y = (c.ny || 0) + (c.nh || 0) / 2;
+          if (!hits.some((it) => Math.abs((it.ny + it.nh / 2) - y) < 0.01 && skuLikeSample(it.str))) {
+            hits = hits.concat([{ str: c.sample, nx: c.nx, ny: c.ny, nw: c.nw || 0.02, nh: c.nh || 0.02 }]);
+          }
+        });
         const clusters = [];
         hits.map((it) => it.ny + it.nh / 2).sort((a, b) => a - b).forEach((y) => {
           const last = clusters[clusters.length - 1];
@@ -4176,7 +4202,7 @@
           recipeBusy: false,
           recipeHint: '',
           recipePreview: '',
-          recipeTeach: { active: false, colId: '', line: false },
+          recipeTeach: { active: false, colId: '', pick: '', line: false },
           pdfView: { pages: [], src: '', error: '' },
           pdfHover: null
         };
@@ -4452,12 +4478,20 @@
           return t ? t.columns : [];
         },
         teachColumns() {
-          if (this.recipeTeach.line) {
-            const t = findTable(this.store, this.recipeDraft.lineTableId) || this.currentTable;
-            return t ? t.columns : [];
+          const out = [];
+          const lt = findTable(this.store, this.recipeDraft.lineTableId);
+          const ht = findTable(this.store, this.recipeDraft.headerTableId) || this.currentTable;
+          if (lt) {
+            (lt.columns || []).forEach((c) => {
+              out.push(Object.assign({}, c, { teachRole: 'line', teachLabel: lt.name + ' · ' + c.name }));
+            });
           }
-          const t = findTable(this.store, this.recipeDraft.headerTableId) || this.currentTable;
-          return t ? t.columns : [];
+          if (ht) {
+            (ht.columns || []).forEach((c) => {
+              out.push(Object.assign({}, c, { teachRole: 'header', teachLabel: ht.name + ' · ' + c.name }));
+            });
+          }
+          return out;
         },
         readerDoc() { return this.attachPreview || this.activeDoc; },
         docPreviewSrc() {
@@ -4502,18 +4536,15 @@
           return !this.undocked.recipes;
         },
         teachHintText() {
-          if (this.recipeTeach.line) {
-            if (this.recipeTeach.colId) {
-              return 'Click values on this column. Extra product numbers on the same column are more unique lines, not a replacement. Skip crate numbers ending in 15.';
-            }
-            return 'Keep Repeats on. Map Item No, Qty, and Price once on the first product line. Upload creates one Line Items row per unique product (crates skipped).';
+          if (this.recipeTeach.colId && this.recipeTeach.line) {
+            return 'Keep this column selected. Click every product number in that PDF column (306810, 306806, 306805). Extra clicks add unique lines — they do not replace. Skip numbers ending in 15.';
           }
           if (this.recipeTeach.colId) {
             return this.undocked.docs || this.panelMode === 'docs'
               ? 'Now click that value on the PDF window.'
               : 'Now click that value on the PDF at the left.';
           }
-          return 'Open the PDF (Docs → Open file or Pop out), pick a column, then click the value.';
+          return 'Pick Line Items · Item No, then click each unique product number on the PDF.';
         }
       },
       watch: {
@@ -4539,7 +4570,7 @@
           deep: true,
           handler(v) {
             if (this._remoteTeach) return;
-            this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, line: v.line } });
+            this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, pick: v.pick, line: v.line } });
             if (v && v.active && this.activeDoc && this.activeDoc.kind === 'pdf') this.ensurePdfTeachView(this.activeDoc);
             if (!(v && v.active)) this.pdfHover = null;
           }
@@ -7054,7 +7085,12 @@
           }
           if (msg.type === 'teach' && msg.teach) {
             this._remoteTeach = true;
-            this.recipeTeach = { active: !!msg.teach.active, colId: msg.teach.colId || '', line: !!msg.teach.line };
+            this.recipeTeach = {
+              active: !!msg.teach.active,
+              colId: msg.teach.colId || '',
+              pick: msg.teach.pick || '',
+              line: !!msg.teach.line
+            };
             this.$nextTick(() => { this._remoteTeach = false; });
           }
           if (msg.type === 'pdf-hit') this.applyPdfHit(msg);
@@ -7396,7 +7432,8 @@
             this.currentTableId = ht.id;
             this.currentGroupId = ht.groupId;
           }
-          this.recipeTeach = { active: true, colId: '', line: false };
+          ensureRecipeLineTable(this.store, this.recipeDraft);
+          this.recipeTeach = { active: true, colId: '', pick: '', line: !!ensureRecipeLineTable(this.store, this.recipeDraft) };
           this.selectedRecipeId = this.recipeDraft.id;
           if (this.splitWidth < 46) this.splitWidth = 48;
           if (!this.activeDoc || this.activeDoc.kind !== 'pdf') {
@@ -7409,25 +7446,39 @@
         },
         stopRecipeTeach() {
           this.saveRecipe();
-          this.recipeTeach = { active: false, colId: '', line: false };
+          this.recipeTeach = { active: false, colId: '', pick: '', line: false };
         },
         onTeachColChange() {
-          const col = this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
-          if (col) this.recipeHint = 'Click “' + col.name + '” on the PDF.';
+          const pick = String(this.recipeTeach.pick || '');
+          if (!pick) {
+            this.recipeTeach.colId = '';
+            return;
+          }
+          const i = pick.indexOf(':');
+          const role = i < 0 ? '' : pick.slice(0, i);
+          const colId = i < 0 ? pick : pick.slice(i + 1);
+          this.recipeTeach.colId = colId;
+          const col = this.teachColumns.find((c) => c.id === colId && (!c.teachRole || c.teachRole === role || !role));
+          if (role === 'line' || (col && col.teachRole === 'line')) {
+            this.recipeTeach.line = true;
+            const lt = ensureRecipeLineTable(this.store, this.recipeDraft);
+            if (lt) { this.currentTableId = lt.id; this.currentGroupId = lt.groupId; }
+            this.recipeHint = 'Several products is on. One click teaches the Nummer column. Other PDFs can list different products — Fill takes every unique number (skip *15).';
+          } else if (col) {
+            this.recipeHint = 'Click “' + col.name + '” on the PDF (once for the whole order). Leave Several products on if you will map SKUs next.';
+          }
         },
         onTeachLineToggle() {
-          this.recipeTeach.colId = '';
           normalizeLineSkip(this.recipeDraft);
           normalizeLineUnique(this.recipeDraft);
-          if (this.recipeTeach.line) {
-            const lt = findTable(this.store, this.recipeDraft.lineTableId);
-            if (lt) {
-              this.currentTableId = lt.id;
-              this.currentGroupId = lt.groupId;
-            } else {
-              this.toast('Set a line-item sheet on the recipe first.', 'warn');
-              this.recipeTeach.line = false;
-            }
+          if (!this.recipeTeach.line) return;
+          const lt = ensureRecipeLineTable(this.store, this.recipeDraft);
+          if (lt) {
+            this.currentTableId = lt.id;
+            this.currentGroupId = lt.groupId;
+            this.saveRecipe();
+          } else {
+            this.toast('Add a Line Items sheet (or set Line-item sheet on the recipe). Several products stays on so SKU clicks can stack.');
           }
         },
         pdfItemStyle(it) {
@@ -7442,6 +7493,21 @@
           const maps = (this.recipeDraft && this.recipeDraft.maps) || [];
           const out = [];
           maps.forEach((m) => {
+            const openCol = m.role === 'line' && (skuLikeSample(m.sample) || (m.choices || []).some((c) => skuLikeSample(c && c.sample)));
+            if (openCol && page && page.items) {
+              const cx = m.nx + (m.nw || 0) / 2;
+              const seen = {};
+              page.items.forEach((it) => {
+                if (Math.abs((it.nx + it.nw / 2) - cx) > 0.08) return;
+                if (!skuLikeSample(it.str)) return;
+                if (recipeLineSkipped(this.recipeDraft, { [m.columnId]: it.str }, [it.str])) return;
+                const key = String(it.str || '').replace(/[\s.]/g, '');
+                if (seen[key]) return;
+                seen[key] = true;
+                out.push({ id: m.id + '-' + key, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh });
+              });
+              return;
+            }
             if (m.page === page.num) out.push(m);
             (m.choices || []).forEach((c, i) => {
               if ((c.page || m.page) === page.num) out.push({ id: m.id + '-c' + i, nx: c.nx, ny: c.ny, nw: c.nw || m.nw, nh: c.nh || m.nh });
@@ -7485,7 +7551,13 @@
           if (lab && sample.toLowerCase().indexOf(lab.toLowerCase()) === 0) {
             sample = sample.slice(lab.length).replace(/^[\s:]+/, '') || sample;
           }
-          const mapCol = this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
+          const pick = String(this.recipeTeach.pick || '');
+          const pickRole = pick.indexOf(':') >= 0 ? pick.slice(0, pick.indexOf(':')) : '';
+          const mapCol = this.teachColumns.find((c) => c.id === this.recipeTeach.colId && (!pickRole || c.teachRole === pickRole))
+            || this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
+          ensureRecipeLineTable(this.store, this.recipeDraft);
+          const lineCol = pickRole === 'line' || !!(mapCol && mapCol.teachRole === 'line') || (this.recipeTeach.line && skuLikeSample(sample)) || (skuLikeSample(sample) && findColumn(findTable(this.store, this.recipeDraft.lineTableId), this.recipeTeach.colId));
+          if (lineCol) this.recipeTeach.line = true;
           let transform = guessTransform(sample);
           if (transform === 'number' && mapCol && (isLinkCol(mapCol) || mapCol.type === 'text' || mapCol.type === 'search' || /product|sku|customer/i.test(mapCol.name || ''))) {
             transform = 'text';
@@ -7493,7 +7565,7 @@
           const map = {
             id: uid('map'),
             columnId: this.recipeTeach.colId,
-            role: this.recipeTeach.line ? 'line' : 'header',
+            role: lineCol ? 'line' : 'header',
             page: page.num,
             nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh,
             sample,
@@ -7534,12 +7606,14 @@
             map.transform = 'text';
           }
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
-          const existing = this.recipeDraft.maps.find((m) => m.columnId === map.columnId && m.role === map.role);
-          if (existing && map.role === 'line' && samePdfColumn(existing, map)) {
-            if (!Array.isArray(existing.choices)) existing.choices = [];
+          const existing = this.recipeDraft.maps.find((m) => m.columnId === map.columnId);
+          const stackOnSameColumn = existing && (existing.role === 'line' || map.role === 'line' || skuLikeSample(sample) || skuLikeSample(existing.sample) || this.recipeTeach.line);
+          if (stackOnSameColumn) {
+            existing.role = 'line';
+            if (!Array.isArray(existing.choices)) existing.choices = existing.sample ? [{ sample: existing.sample, page: existing.page, nx: existing.nx, ny: existing.ny, nw: existing.nw, nh: existing.nh }] : [];
             const already = mapChoiceLabel(existing);
             if (already.indexOf(sample) >= 0) {
-              this.toast(sample + ' is already on this column.');
+              this.toast(sample + ' is already on this column. Unique so far: ' + already.join(', ') + '.');
               return;
             }
             if (recipeLineSkipped(this.recipeDraft, { [existing.columnId]: sample }, [sample])) {
@@ -7548,8 +7622,8 @@
             }
             existing.choices.push({ sample, page: page.num, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh });
             this.saveRecipe();
-            this.recipeHint = this.recipeMapColumnName(existing) + ' now has ' + mapChoiceLabel(existing).join(', ') + '. Same column — click more products, or pick Qty/Price.';
-            this.toast('Added ' + sample + ' on the same column. Unique products: ' + mapChoiceLabel(existing).join(', ') + '.');
+            this.recipeHint = this.recipeMapColumnName(existing) + ' examples: ' + mapChoiceLabel(existing).join(', ') + '. Fill still reads every unique number in this column on other PDFs.';
+            this.toast('Added ' + sample + ' as an example. Other PDFs are not limited to this list.');
             return;
           }
           if (existing) this.recipeDraft.maps = this.recipeDraft.maps.filter((m) => m !== existing);
@@ -7558,8 +7632,10 @@
           if (!this.recipeDraft.detect) this.recipeDraft.detect = sample;
           this.saveRecipe();
           if (map.role === 'line') {
-            this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. Keep this column selected and click the other product numbers in the same PDF column, or pick Qty/Price.';
-            this.toast('Mapped ' + sample + '. Click more unique products in this same column if you want — they will not overwrite.');
+            normalizeLineSkip(this.recipeDraft);
+            if (skuLikeSample(sample) && !this.recipeDraft.lineSkip.enabled) this.recipeDraft.lineSkip.enabled = true;
+            this.recipeHint = 'Mapped the product-number column from ' + sample + '. Other PDFs can have different SKUs in this column — Fill will take each unique number (skip crates ending in 15).';
+            this.toast('Column mapped. Later orders with different products still fill — unique numbers only.');
           } else {
             this.recipeTeach.colId = '';
             this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
