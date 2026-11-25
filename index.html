@@ -204,7 +204,7 @@
     <div v-else class="h-full flex flex-col bg-ink-900">
       <!-- Header -->
       <header class="h-14 shrink-0 border-b border-line bg-ink-850 flex items-center gap-3 px-3 md:px-4">
-        <button class="rounded-md p-2 hover:bg-ink-700" @click="toggleWorkspacePanel" :title="workspacePanelOpen ? 'Hide workspace' : 'Show workspace'">
+        <button v-if="!panelMode" class="rounded-md p-2 hover:bg-ink-700" @click="toggleWorkspacePanel" :title="workspacePanelOpen ? 'Hide workspace' : 'Show workspace'">
           <icon name="panel" size="16"></icon>
         </button>
         <div class="flex items-center gap-2 min-w-0">
@@ -233,13 +233,14 @@
           <button class="sm:hidden rounded-lg border border-line px-2 py-1.5 text-xs" :class="mode==='architect' ? 'bg-gold text-ink-900' : 'bg-teal text-ink-900'" @click="mode==='architect' ? setMode('operator') : requestArchitect()">
             {{ mode==='architect' ? 'Architect' : 'Operator' }}
           </button>
-          <button class="rounded-lg border border-line px-2 py-1.5 text-xs hover:bg-ink-700 inline-flex items-center gap-1" :class="splitOpen && 'border-teal text-teal'" @click="toggleSplit" title="Split-screen document workspace">
+          <button v-if="!panelMode" class="rounded-lg border border-line px-2 py-1.5 text-xs hover:bg-ink-700 inline-flex items-center gap-1" :class="(splitOpen || undocked.docs) && 'border-teal text-teal'" @click="toggleSplit" title="Split-screen document workspace">
             <icon name="panel" size="14" /> <span class="hidden md:inline">Docs</span>
           </button>
-          <button class="rounded-lg border border-line px-2 py-1.5 text-xs hover:bg-ink-700 inline-flex items-center gap-1" :class="recipeOpen && 'border-gold text-gold'" @click="openRecipes" title="Client order recipes — map PDF fields to cells">
+          <button v-if="!panelMode" class="rounded-lg border border-line px-2 py-1.5 text-xs hover:bg-ink-700 inline-flex items-center gap-1" :class="(recipeOpen || undocked.recipes) && 'border-gold text-gold'" @click="openRecipes" title="Client order recipes — map PDF fields to cells">
             <span class="hidden md:inline">Recipes</span>
             <span class="md:hidden">Rx</span>
           </button>
+          <button v-if="panelMode" class="rounded-lg bg-gold text-ink-900 font-semibold px-2 py-1.5 text-xs" @click="closePanelWindow">Close this window</button>
           <button class="rounded-lg border border-line px-2 py-1.5 text-xs hover:bg-ink-700 inline-flex items-center gap-1" @click="exportExcel" title="Download Excel workbook">
             <icon name="download" size="14" /> <span class="hidden lg:inline">Excel</span>
           </button>
@@ -271,20 +272,29 @@
           <input type="checkbox" v-model="recipeTeach.line" class="accent-ink-900" @change="onTeachLineToggle" />
           Repeats on each line
         </label>
-        <span class="opacity-80">{{ recipeTeach.colId ? 'Now click that value on the PDF at the left.' : 'Open the PDF with Docs → Open file, pick a column, then click the value.' }}</span>
+        <span class="opacity-80">{{ teachHintText }}</span>
+        <button v-if="!panelMode && !undocked.docs" class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="popOutPanel('docs')">Pop out PDF</button>
         <button class="ml-auto rounded-md bg-ink-900 text-gold px-2 py-1 text-[12px] font-semibold" @click="saveRecipe">Save recipe</button>
         <button class="rounded-md border border-ink-900/30 px-2 py-1 text-[12px]" @click="stopRecipeTeach">Done</button>
       </div>
-      <div class="flex-1 flex flex-col md:flex-row min-h-0 relative">
+      <div v-if="!panelMode && (undocked.docs || undocked.recipes)" class="shrink-0 bg-ink-800 border-b border-line text-[12px] px-3 py-1.5 flex flex-wrap items-center gap-2">
+        <span v-if="undocked.docs">The document panel is in another window — drag it onto a second monitor.</span>
+        <span v-if="undocked.recipes">The recipe editor is in another window.</span>
+        <button v-if="undocked.docs" class="rounded-md bg-ink-700 px-2 py-0.5" @click="focusPopout('docs')">Show PDF</button>
+        <button v-if="undocked.docs" class="rounded-md bg-ink-700 px-2 py-0.5" @click="dockPanel('docs')">Dock PDF here</button>
+        <button v-if="undocked.recipes" class="rounded-md bg-ink-700 px-2 py-0.5" @click="focusPopout('recipes')">Show recipes</button>
+        <button v-if="undocked.recipes" class="rounded-md bg-ink-700 px-2 py-0.5" @click="dockPanel('recipes')">Dock recipes here</button>
+      </div>
+      <div v-if="panelMode!=='recipes'" class="flex-1 flex flex-col md:flex-row min-h-0 relative">
         <!-- Sidebar overlay (mobile) -->
         <div v-if="sidebarOpen" class="md:hidden absolute inset-0 bg-black/50 z-20" @click="sidebarOpen=false"></div>
 
-        <button v-if="sidebarCollapsed" type="button" class="hidden md:flex w-9 shrink-0 border-r border-line bg-ink-850 items-center justify-center text-mute hover:text-white hover:bg-ink-700" title="Show workspace" @click="toggleWorkspacePanel">
+        <button v-if="!panelMode && sidebarCollapsed" type="button" class="hidden md:flex w-9 shrink-0 border-r border-line bg-ink-850 items-center justify-center text-mute hover:text-white hover:bg-ink-700" title="Show workspace" @click="toggleWorkspacePanel">
           <icon name="panel" size="16"></icon>
         </button>
 
         <!-- Sidebar -->
-        <aside class="w-72 shrink-0 border-r border-line bg-ink-850 flex flex-col absolute md:static inset-y-0 left-0 z-30 md:z-0 transition-transform" :class="workspacePanelOpen ? 'translate-x-0' : '-translate-x-full md:hidden'">
+        <aside v-if="!panelMode" class="w-72 shrink-0 border-r border-line bg-ink-850 flex flex-col absolute md:static inset-y-0 left-0 z-30 md:z-0 transition-transform" :class="workspacePanelOpen ? 'translate-x-0' : '-translate-x-full md:hidden'">
           <div class="px-3 py-3 flex items-center justify-between gap-2">
             <div>
               <div class="text-[11px] uppercase tracking-[0.16em] text-mute">Workspace</div>
@@ -366,7 +376,7 @@
         </aside>
 
         <!-- Split document pane -->
-        <section v-if="splitOpen" class="shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-line bg-ink-900 md:min-w-[240px]" :style="splitPaneStyle">
+        <section v-if="docsPaneVisible" class="shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-line bg-ink-900 md:min-w-[240px]" :class="panelMode==='docs' && 'flex-1 min-w-0 border-0'" :style="splitPaneStyle">
           <div class="h-10 shrink-0 border-b border-line flex items-center gap-2 px-2">
             <div class="text-xs font-medium truncate">Source document</div>
             <div class="ml-auto flex items-center gap-1">
@@ -375,8 +385,9 @@
                 <input type="file" class="hidden" multiple accept=".pdf,image/*,.txt,.edi,.x12,.csv,.json,text/plain" @change="onFileInput" />
               </label>
               <button v-if="activeDoc" class="text-[11px] rounded-md px-2 py-1 bg-ink-700 hover:brightness-110" title="Open full-size reader" @click="openDocReader">Read large</button>
-              <button v-if="activeDoc" class="p-1 text-mute hover:text-white" title="Open in a new window" @click="openDocPopout"><icon name="external" size="14"></icon></button>
-              <button class="p-1 text-mute hover:text-white" title="Close documents" @click="splitOpen=false"><icon name="x" size="14" /></button>
+              <button v-if="!panelMode" class="text-[11px] rounded-md px-2 py-1 bg-ink-700 hover:brightness-110" title="Move this panel to another window or monitor" @click="popOutPanel('docs')">Pop out</button>
+              <button v-if="activeDoc && panelMode!=='docs'" class="p-1 text-mute hover:text-white" title="Open in a new window" @click="openDocPopout"><icon name="external" size="14"></icon></button>
+              <button v-if="!panelMode" class="p-1 text-mute hover:text-white" title="Close documents" @click="splitOpen=false"><icon name="x" size="14" /></button>
             </div>
           </div>
           <div v-if="docs.length" class="flex gap-1 px-2 py-1 border-b border-line overflow-x-auto">
@@ -436,10 +447,10 @@
             <p v-if="recipeHint" class="text-mute leading-snug">{{ recipeHint }}</p>
           </div>
         </section>
-        <div v-if="splitOpen" class="split-resizer shrink-0 hidden md:block" :class="resizing && 'active'" @mousedown.prevent="startResize"></div>
+        <div v-if="docsPaneVisible && !panelMode" class="split-resizer shrink-0 hidden md:block" :class="resizing && 'active'" @mousedown.prevent="startResize"></div>
 
         <!-- Main table workspace -->
-        <main class="flex-1 min-w-0 flex flex-col bg-ink-900">
+        <main v-if="!panelMode" class="flex-1 min-w-0 flex flex-col bg-ink-900">
           <div v-if="currentGroup && currentGroup.kind==='dashboard' && !currentTable" class="flex-1 overflow-auto p-6 md:p-10">
             <div class="max-w-xl">
               <div class="text-[11px] uppercase tracking-[0.16em] text-mute">Dashboard idea</div>
@@ -920,8 +931,10 @@
       </modal-frame>
 
       <!-- Client recipes -->
-      <modal-frame v-if="recipeOpen" title="Client order recipes" wide @close="recipeOpen=false">
-        <p class="text-sm text-mute mb-3">Unlock Architect, open a PDF with <strong class="text-mist">Docs → Open file</strong>, then <strong class="text-mist">Teach on PDF</strong>: pick a column and click that value on the page. You can still type regex below if you prefer.</p>
+      <modal-frame v-if="recipeOpen && recipesPaneVisible" title="Client order recipes" wide :page="panelMode==='recipes'" @close="closeRecipesPane">
+        <p class="text-sm text-mute mb-3">Unlock Architect, open a PDF with <strong class="text-mist">Docs → Open file</strong>, then <strong class="text-mist">Teach on PDF</strong>: pick a column and click that value on the page. You can still type regex below if you prefer.
+          <button v-if="!panelMode" type="button" class="ml-2 text-teal" @click="popOutPanel('recipes')">Pop out to another window</button>
+        </p>
         <div v-if="mode!=='architect'" class="mb-3 rounded-lg border border-gold/40 bg-gold/10 px-3 py-2 text-sm text-gold">
           You are in Operator Mode, so recipes are read-only. Click <strong class="text-white">Architect</strong> in the top bar and enter your PIN to add, edit, or delete recipes.
           <button type="button" class="ml-2 rounded-md bg-gold text-ink-900 font-semibold px-2 py-0.5 text-[12px]" @click="requestArchitect">Unlock Architect</button>
@@ -1205,9 +1218,9 @@
               <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line" @click="imgZoom=1">Fit</button>
               <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line" @click="imgZoom=Math.min(4, imgZoom+.15)">+</button>
             </template>
-            <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line inline-flex items-center gap-1" @click="openDocPopout">
+            <button class="text-[11px] rounded-md px-2 py-1 bg-ink-800 border border-line inline-flex items-center gap-1" @click="popOutPanel('docs'); closeDocReader()">
               <icon name="external" size="12"></icon>
-              <span>New window</span>
+              <span>Pop out</span>
             </button>
             <button class="text-[11px] rounded-md px-2 py-1 bg-gold text-ink-900 font-semibold" @click="closeDocReader">Close</button>
           </div>
@@ -1260,6 +1273,8 @@
   <script>
   (function () {
     const STORAGE_KEY = 'forgegrid.workspace.v1';
+    const UNDOCK_CH = 'forgegrid.panels.v1';
+    const UNDOCK_SESSION = 'forgegrid.undocked.v1';
     const { createApp } = window.Vue || {};
 
     const COLUMN_TYPES = [
@@ -2875,16 +2890,16 @@
     };
 
     const ModalFrame = {
-      props: { title: String, wide: Boolean },
+      props: { title: String, wide: Boolean, page: Boolean },
       emits: ['close'],
       template: `
-        <div class="fixed inset-0 z-[70] flex items-start justify-center p-4 md:p-8 bg-black/55" @click.self="$emit('close')">
-          <div class="w-full rounded-2xl border border-line bg-ink-850 shadow-panel" :class="wide ? 'max-w-3xl' : 'max-w-lg'" @click.stop>
-            <div class="px-4 py-3 border-b border-line flex items-center justify-between">
+        <div :class="page ? 'flex-1 min-h-0 flex flex-col bg-ink-900' : 'fixed inset-0 z-[70] flex items-start justify-center p-4 md:p-8 bg-black/55'" @click.self="page ? undefined : $emit('close')">
+          <div class="w-full border border-line bg-ink-850 shadow-panel flex flex-col min-h-0" :class="page ? 'flex-1 rounded-none border-0 shadow-none' : (wide ? 'max-w-3xl rounded-2xl' : 'max-w-lg rounded-2xl')" @click.stop>
+            <div class="px-4 py-3 border-b border-line flex items-center justify-between shrink-0">
               <h3 class="font-semibold">{{ title }}</h3>
               <button class="text-mute hover:text-white" @click="$emit('close')"><icon name="x" /></button>
             </div>
-            <div class="p-4 max-h-[min(72vh,560px)] overflow-y-auto"><slot /></div>
+            <div class="p-4 overflow-y-auto" :class="page ? 'flex-1 min-h-0' : 'max-h-[min(72vh,560px)]'"><slot /></div>
           </div>
         </div>`
     };
@@ -3352,6 +3367,12 @@
           view: 'grid',
           sidebarOpen: false,
           sidebarCollapsed: false,
+          panelMode: (function () {
+            try { return new URLSearchParams(location.search).get('panel') || ''; } catch (e) { return ''; }
+          })(),
+          winId: uid('win'),
+          undocked: { docs: false, recipes: false },
+          popouts: { docs: null, recipes: null },
           splitOpen: false,
           splitWidth: 42,
           resizing: false,
@@ -3688,8 +3709,27 @@
           return d.url + '#toolbar=1&navpanes=0&scrollbar=1&view=FitH&zoom=' + encodeURIComponent(z);
         },
         splitPaneStyle() {
+          if (this.panelMode === 'docs') return { width: '100%', flex: '1 1 auto', height: '100%' };
           if (this.windowWidth < 768) return { width: '100%', height: '42vh' };
           return { width: this.splitWidth + '%' };
+        },
+        docsPaneVisible() {
+          if (this.panelMode === 'docs') return true;
+          if (this.panelMode) return false;
+          return this.splitOpen && !this.undocked.docs;
+        },
+        recipesPaneVisible() {
+          if (this.panelMode === 'recipes') return true;
+          if (this.panelMode) return false;
+          return !this.undocked.recipes;
+        },
+        teachHintText() {
+          if (this.recipeTeach.colId) {
+            return this.undocked.docs || this.panelMode === 'docs'
+              ? 'Now click that value on the PDF window.'
+              : 'Now click that value on the PDF at the left.';
+          }
+          return 'Open the PDF (Docs → Open file or Pop out), pick a column, then click the value.';
         }
       },
       watch: {
@@ -3698,11 +3738,20 @@
           handler() { this.schedulePersist(); }
         },
         sheetBindKey() {
+          if (this.panelMode) return;
           this.$nextTick(() => this.bindSheet());
         },
         activeDoc(doc) {
           if (doc && doc.kind === 'pdf' && doc.url) this.loadPdfView(doc);
           else this.pdfView = { pages: [], src: '' };
+          this.sendUndockPdf();
+        },
+        recipeTeach: {
+          deep: true,
+          handler(v) {
+            if (this._remoteTeach) return;
+            this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, line: v.line } });
+          }
         }
       },
       methods: {
@@ -3764,6 +3813,7 @@
           this.paintAttachCells();
         },
         bindSheet() {
+          if (this.panelMode) return;
           const el = this.$refs.sheetHost;
           const jss = window.jspreadsheet;
           if (!el || this.view !== 'grid' || !this.currentTable || !this.visibleColumns.length) {
@@ -4157,7 +4207,7 @@
           if (this.store.audit.length > 1200) this.store.audit.splice(0, this.store.audit.length - 1000);
         },
         schedulePersist() {
-          if (!this.persistEnabled) return;
+          if (!this.persistEnabled || this._applyingStorage) return;
           clearTimeout(this._persistTimer);
           this._persistTimer = setTimeout(() => this.persist(), 200);
         },
@@ -6023,7 +6073,191 @@
           if (e.shiftKey) this.applySelection(this.selectionAnchor.recId ? this.selectionAnchor : { recId: rows[rI].id, colId: cols[cI].id }, next);
           else this.applySelection(next, next);
         },
-        toggleSplit() { this.splitOpen = !this.splitOpen; if (this.splitOpen) this.view = 'form'; },
+        toggleSplit() {
+          if (this.undocked.docs) return this.focusPopout('docs');
+          this.splitOpen = !this.splitOpen;
+          if (this.splitOpen) this.view = 'form';
+        },
+        undockPost(msg) {
+          try {
+            if (this._undockCh) this._undockCh.postMessage(Object.assign({ from: this.winId }, msg));
+          } catch (e) {}
+        },
+        rememberUndock() {
+          try { sessionStorage.setItem(UNDOCK_SESSION, JSON.stringify(this.undocked)); } catch (e) {}
+        },
+        popOutPanel(name) {
+          const u = new URL(location.href);
+          u.searchParams.set('panel', name);
+          const feat = name === 'docs'
+            ? 'popup=yes,width=980,height=1200,left=60,top=30'
+            : 'popup=yes,width=920,height=1000,left=100,top=50';
+          const w = window.open(u.toString(), 'forgegrid-' + name, feat);
+          if (!w) return this.toast('Allow pop-ups so the panel can open on another monitor.', 'warn');
+          this.popouts[name] = w;
+          this.undocked[name] = true;
+          this.rememberUndock();
+          if (name === 'docs') {
+            this.splitOpen = false;
+            this.docReaderOpen = false;
+          }
+          if (name === 'recipes') this.recipeOpen = false;
+          this.toast('Drag that window onto another monitor. Clicks on the PDF still map here.');
+          setTimeout(() => this.sendUndockPdf(), 400);
+        },
+        dockPanel(name) {
+          this.undocked[name] = false;
+          this.rememberUndock();
+          const w = this.popouts[name];
+          if (w && !w.closed) {
+            try { w.close(); } catch (e) {}
+          }
+          this.popouts[name] = null;
+          if (name === 'docs') this.splitOpen = true;
+          if (name === 'recipes') this.openRecipes();
+        },
+        focusPopout(name) {
+          const w = this.popouts[name];
+          if (w && !w.closed) {
+            try { w.focus(); } catch (e) {}
+          } else {
+            this.popOutPanel(name);
+          }
+        },
+        closePanelWindow() {
+          this.undockPost({ type: 'dock', panel: this.panelMode });
+          window.close();
+        },
+        closeRecipesPane() {
+          if (this.panelMode === 'recipes') return this.closePanelWindow();
+          this.recipeOpen = false;
+        },
+        async sendUndockPdf() {
+          if (this.panelMode) return;
+          if (!this.undocked.docs) return;
+          const d = this.activeDoc;
+          if (!d) {
+            this.undockPost({ type: 'pdf-clear' });
+            return;
+          }
+          try {
+            let buffer = null;
+            if (d.file) buffer = await d.file.arrayBuffer();
+            else if (d.url) {
+              const res = await fetch(d.url);
+              buffer = await res.arrayBuffer();
+            }
+            this.undockPost({
+              type: 'pdf',
+              name: d.name,
+              kind: d.kind,
+              mime: d.type || (d.kind === 'pdf' ? 'application/pdf' : ''),
+              text: d.text || '',
+              size: d.size || (buffer && buffer.byteLength) || 0,
+              buffer
+            });
+          } catch (e) {
+            this.toast('Could not send the document to the other window.', 'warn');
+          }
+        },
+        async applyUndockPdf(msg) {
+          if (this.panelMode !== 'docs') return;
+          if (this._popPdfUrl) {
+            try { URL.revokeObjectURL(this._popPdfUrl); } catch (e) {}
+            this._popPdfUrl = '';
+          }
+          if (!msg.buffer) return;
+          const blob = new Blob([msg.buffer], { type: msg.mime || 'application/pdf' });
+          const url = URL.createObjectURL(blob);
+          this._popPdfUrl = url;
+          const doc = {
+            id: 'popout-doc',
+            name: msg.name || 'Document',
+            size: msg.size || blob.size,
+            type: msg.mime || '',
+            kind: msg.kind || 'pdf',
+            url,
+            text: msg.text || '',
+            file: blob
+          };
+          this.docs = [doc];
+          this.activeDocId = doc.id;
+          this.splitOpen = true;
+        },
+        onUndockMsg(msg) {
+          if (!msg || msg.from === this.winId) return;
+          if (msg.type === 'hello' && msg.panel === 'docs') this.sendUndockPdf();
+          if (msg.type === 'pdf' && this.panelMode === 'docs') this.applyUndockPdf(msg);
+          if (msg.type === 'pdf-clear' && this.panelMode === 'docs') {
+            this.docs = [];
+            this.activeDocId = null;
+            this.pdfView = { pages: [], src: '' };
+          }
+          if (msg.type === 'teach' && msg.teach) {
+            this._remoteTeach = true;
+            this.recipeTeach = { active: !!msg.teach.active, colId: msg.teach.colId || '', line: !!msg.teach.line };
+            this.$nextTick(() => { this._remoteTeach = false; });
+          }
+          if (msg.type === 'pdf-hit') this.applyPdfHit(msg);
+          if (msg.type === 'dock' && msg.panel) {
+            this.undocked[msg.panel] = false;
+            this.rememberUndock();
+            if (msg.panel === 'docs') this.splitOpen = true;
+            if (msg.panel === 'recipes') this.openRecipes();
+          }
+        },
+        applyPdfHit(msg) {
+          if (this.panelMode === 'docs') return;
+          if (this.undocked.recipes && this.panelMode !== 'recipes') return;
+          const it = msg.item;
+          const page = { num: msg.pageNum, items: msg.items || [] };
+          if (!it) return;
+          this.onPdfTextClick(page, it, { fromPopout: true, label: msg.label });
+        },
+        initUndock() {
+          try {
+            const raw = sessionStorage.getItem(UNDOCK_SESSION);
+            if (raw && !this.panelMode) this.undocked = Object.assign({ docs: false, recipes: false }, JSON.parse(raw));
+          } catch (e) {}
+          try {
+            this._undockCh = new BroadcastChannel(UNDOCK_CH);
+            this._undockCh.onmessage = (ev) => this.onUndockMsg(ev.data);
+          } catch (e) { this._undockCh = null; }
+          if (this.panelMode === 'docs') {
+            this.splitOpen = true;
+            this.undockPost({ type: 'hello', panel: 'docs' });
+          }
+          if (this.panelMode === 'recipes') this.openRecipes();
+          this._popWatch = setInterval(() => {
+            ['docs', 'recipes'].forEach((name) => {
+              const w = this.popouts[name];
+              if (this.undocked[name] && w && w.closed) {
+                this.undocked[name] = false;
+                this.popouts[name] = null;
+                this.rememberUndock();
+                if (name === 'docs') this.splitOpen = true;
+              }
+            });
+          }, 900);
+        },
+        onWorkspaceStorage(e) {
+          if (!e || e.key !== STORAGE_KEY || !e.newValue) return;
+          if (this._applyingStorage) return;
+          try {
+            const parsed = JSON.parse(e.newValue);
+            if (!parsed || parsed.version !== 1) return;
+            this._applyingStorage = true;
+            this.store = normalizeStore(parsed);
+            if (this.recipeDraft && this.recipeDraft.id) {
+              const r = (this.store.recipes || []).find((x) => x.id === this.recipeDraft.id);
+              if (r) this.recipeDraft = clone(r);
+            }
+          } catch (err) {}
+          this.$nextTick(() => { this._applyingStorage = false; });
+        },
+        onPanelUnload() {
+          if (this.panelMode) this.undockPost({ type: 'dock', panel: this.panelMode });
+        },
         openDocReader() {
           if (!this.readerDoc) return this.toast('Open a document first.', 'warn');
           this.docReaderOpen = true;
@@ -6033,10 +6267,7 @@
           this.attachPreview = null;
         },
         openDocPopout() {
-          const d = this.readerDoc;
-          if (!d || !d.url) return this.toast('Open a document first.', 'warn');
-          const w = window.open(d.url, '_blank', 'noopener,noreferrer');
-          if (!w) this.toast('Allow pop-ups to open the document in a new window.', 'warn');
+          this.popOutPanel('docs');
         },
         focusAttachRow(rec) {
           if (!rec || !this.currentTable) return;
@@ -6054,7 +6285,8 @@
             doc.url = url; doc.kind = kind; doc.text = text || doc.text || ''; doc.name = meta.name;
           }
           this.activeDocId = doc.id;
-          this.splitOpen = true;
+          if (this.undocked.docs) this.sendUndockPdf();
+          else this.splitOpen = true;
           this.docReaderOpen = false;
           this.attachPreview = null;
           this.pdfZoom = 'page-width';
@@ -6102,7 +6334,7 @@
           if (kind === 'text') doc.text = await file.text();
           this.docs.push(doc);
           this.activeDocId = doc.id;
-          this.splitOpen = true;
+          if (!this.undocked.docs) this.splitOpen = true;
           this.pdfZoom = 'page-width';
           if (kind === 'pdf' && this.splitWidth < 52) this.splitWidth = 52;
           this.audit('document.open', file.name, kind);
@@ -6155,6 +6387,7 @@
           }
         },
         openRecipes() {
+          if (this.undocked.recipes && this.panelMode !== 'recipes') return this.focusPopout('recipes');
           this.recipeOpen = true;
           const cur = this.store.recipes.find((r) => r.id === this.selectedRecipeId) || this.store.recipes[0];
           this.recipeDraft = cur ? clone(cur) : this.freshRecipe();
@@ -6200,8 +6433,8 @@
           if (!this.recipeDraft.id) return;
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
           this.saveRecipe();
-          this.recipeOpen = false;
-          this.splitOpen = true;
+          if (this.panelMode !== 'recipes') this.recipeOpen = false;
+          if (!this.undocked.docs && this.panelMode !== 'docs') this.splitOpen = true;
           this.view = 'grid';
           const ht = findTable(this.store, this.recipeDraft.headerTableId);
           if (ht) {
@@ -6253,14 +6486,20 @@
           const mapped = maps.some((m) => m.page === page.num && Math.abs(m.nx - it.nx) < 0.008 && Math.abs(m.ny - it.ny) < 0.008);
           return { mapped, pick: this.recipeTeach.active && !!this.recipeTeach.colId };
         },
-        onPdfTextClick(page, it) {
+        onPdfTextClick(page, it, extra) {
+          extra = extra || {};
+          if (this.panelMode === 'docs' && !extra.fromPopout) {
+            const lab = leftLabelFor(page.items, it);
+            this.undockPost({ type: 'pdf-hit', pageNum: page.num, item: { str: it.str, nx: it.nx, ny: it.ny, nw: it.nw, nh: it.nh }, label: lab });
+            return;
+          }
           if (!this.recipeTeach.active || !this.recipeTeach.colId) {
             if (this.recipeTeach.active) this.toast('Pick a column in the gold bar first.', 'warn');
             return;
           }
           let sample = String(it.str || '').replace(/\s+/g, ' ').trim();
           if (!sample) return;
-          const lab = leftLabelFor(page.items, it);
+          const lab = extra.label != null ? extra.label : leftLabelFor(page.items, it);
           if (lab && sample.toLowerCase().indexOf(lab.toLowerCase()) === 0) {
             sample = sample.slice(lab.length).replace(/^[\s:]+/, '') || sample;
           }
@@ -6806,11 +7045,14 @@
           this.store = emptyStore();
         }
         this.ready = true;
+        this.initUndock();
         this.$nextTick(() => this.bindSheet());
         window.addEventListener('paste', this.onPaste);
         window.addEventListener('copy', this.onCopy);
         window.addEventListener('click', this.onDocClick);
         window.addEventListener('keydown', this.onWinKey);
+        window.addEventListener('storage', this.onWorkspaceStorage);
+        window.addEventListener('beforeunload', this.onPanelUnload);
       },
       unmounted() {
         window.removeEventListener('paste', this.onPaste);
@@ -6820,6 +7062,10 @@
         window.removeEventListener('mouseup', this.endSelectDrag);
         window.removeEventListener('mousemove', this.onSelectPointerMove);
         window.removeEventListener('keydown', this.onWinKey);
+        window.removeEventListener('storage', this.onWorkspaceStorage);
+        window.removeEventListener('beforeunload', this.onPanelUnload);
+        if (this._popWatch) clearInterval(this._popWatch);
+        if (this._undockCh) try { this._undockCh.close(); } catch (e) {}
         this.destroySheet();
       }
     });
