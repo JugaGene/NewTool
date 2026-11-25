@@ -126,6 +126,7 @@
       background: rgba(62, 207, 190, 0.16);
     }
     .forge-sheet .jexcel_corner { background: #3ecfbe; }
+    .forge-sheet .jexcel > tbody > tr > td .sheet-attach { min-height: 32px; }
     .forge-sheet .jexcel_toolbar, .forge-sheet .jexcel_pagination, .forge-sheet .jexcel_filter { display: none !important; }
     .jexcel_contextmenu, .jcontextmenu { background: #10192c !important; border: 1px solid #2a3b5c !important; color: #d7e0f2 !important; }
   </style>
@@ -2191,6 +2192,27 @@
       return !!(v && typeof v === 'object' && v.id && v.name);
     }
 
+    const PAPER_DOC_SVG = '<svg viewBox="0 0 32 40" aria-hidden="true"><path d="M5 2.5h14.5L29 12v24.5A2.5 2.5 0 0 1 26.5 39h-21A2.5 2.5 0 0 1 3 36.5v-32A2.5 2.5 0 0 1 5.5 2.5H5z" fill="#f4f1e8"/><path d="M19.5 2.5V11a1 1 0 0 0 1 1H29" fill="#d8d2c3"/><path d="M19.5 2.5L29 12" fill="none" stroke="#b7b09e" stroke-width="1"/><path d="M8 19h16M8 24h11M8 29h14" fill="none" stroke="#9a9382" stroke-width="1.6" stroke-linecap="round"/></svg>';
+    const PAPER_EMPTY_SVG = '<svg viewBox="0 0 32 40" aria-hidden="true"><path d="M5 2.5h14.5L29 12v24.5A2.5 2.5 0 0 1 26.5 39h-21A2.5 2.5 0 0 1 3 36.5v-32A2.5 2.5 0 0 1 5.5 2.5H5z" fill="none" stroke="#8ea0be" stroke-width="1.6"/><path d="M19.5 2.5V11a1 1 0 0 0 1 1H29" fill="none" stroke="#8ea0be" stroke-width="1.6"/><path d="M16 20v10M11 25h10" fill="none" stroke="#3ecfbe" stroke-width="1.8" stroke-linecap="round"/></svg>';
+    function attachActSvg(inner) {
+      return '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
+    }
+    function escapeAttr(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+    function attachSheetHtml(meta, locked) {
+      if (meta) {
+        return '<div class="attach-chip sheet-attach">'
+          + '<button type="button" class="paper-doc" data-fg-act="open" title="' + escapeAttr('Open beside this row — ' + meta.name) + '">' + PAPER_DOC_SVG + '</button>'
+          + '<button type="button" class="act open" data-fg-act="open" title="Open beside this row">' + attachActSvg('<path d="M3 5h18v14H3zM9 5v14"/>') + '</button>'
+          + '<button type="button" class="act" data-fg-act="popout" title="Open in a new window">' + attachActSvg('<path d="M14 5h5v5"/><path d="M10 14L19 5"/><path d="M19 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/>') + '</button>'
+          + '<button type="button" class="act edit" data-fg-act="pick"' + (locked ? ' disabled' : '') + ' title="' + (locked ? 'Unlock the row to replace this file' : 'Replace file') + '">' + attachActSvg('<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>') + '</button>'
+          + (locked ? '' : '<button type="button" class="act" data-fg-act="clear" title="Remove attachment">' + attachActSvg('<path d="M6 6l12 12M18 6L6 18"/>') + '</button>')
+          + '</div>';
+      }
+      return '<div class="attach-chip sheet-attach"><button type="button" class="paper-doc empty" data-fg-act="pick"' + (locked ? ' disabled' : '') + ' title="' + (locked ? 'No file' : 'Attach a file') + '">' + PAPER_EMPTY_SVG + '</button></div>';
+    }
+
     const attachmentBlobs = new Map();
 
     function openAttachDb() {
@@ -3115,7 +3137,7 @@
           return this.filteredRecords.map((rec) => cols.map((col) => {
             const use = effectiveColumn(rec, col);
             if (use.type === 'checkbox') return !!rawStored(rec, col);
-            if (use.type === 'attachment') return this.displayValue(rec, col) || 'Attach file…';
+            if (use.type === 'attachment') return '';
             return this.displayValue(rec, col);
           }));
         },
@@ -3158,6 +3180,7 @@
           } catch (err) { /* ignore */ }
           if (this._jexcel && this._jexcel.ignoreEvents != null) this._jexcel.ignoreEvents = false;
           this._sheetLock = false;
+          this.paintAttachCells();
         },
         bindSheet() {
           const el = this.$refs.sheetHost;
@@ -3195,11 +3218,7 @@
             copyCompatibility: true,
             wordWrap: false,
             updateTable(instance, cell, col, row, val, label, cellName) {
-              const c = vm.visibleColumns[Number(col)];
-              if (c && c.type === 'attachment') {
-                cell.style.cursor = 'pointer';
-                cell.title = 'Click to open or attach a file';
-              }
+              vm.paintAttachTd(cell, Number(col), Number(row));
             },
             contextMenu(obj, x, y, e) {
               if (e) e.preventDefault();
@@ -3325,20 +3344,60 @@
             });
             if (!el._fgAttachBound) {
               el._fgAttachBound = true;
-              el.addEventListener('click', (e) => {
-                const td = e.target && e.target.closest && e.target.closest('td[data-x][data-y]');
-                if (!td || td.classList.contains('jexcel_row')) return;
-                const x = Number(td.getAttribute('data-x'));
-                const y = Number(td.getAttribute('data-y'));
-                const col = vm.visibleColumns[x];
-                const rec = vm.filteredRecords[y];
-                if (!col || !rec) return;
-                if (effectiveColumn(rec, col).type !== 'attachment') return;
-                e.preventDefault();
-                vm.openSheetAttach(rec, col, td);
-              });
+              el.addEventListener('click', (e) => vm.onSheetAttachClick(e));
             }
+            vm.paintAttachCells();
           });
+        },
+        paintAttachTd(td, x, y) {
+          if (!td) return;
+          const col = this.visibleColumns[x];
+          const rec = this.filteredRecords[y];
+          if (!col || !rec || effectiveColumn(rec, col).type !== 'attachment') return;
+          const meta = isAttachMeta(rawStored(rec, col)) ? rawStored(rec, col) : null;
+          td.innerHTML = attachSheetHtml(meta, !!rec.locked);
+          td.style.cursor = 'pointer';
+        },
+        paintAttachCells() {
+          const el = this.$refs.sheetHost;
+          if (!el) return;
+          el.querySelectorAll('tbody td[data-x][data-y]').forEach((td) => {
+            this.paintAttachTd(td, Number(td.getAttribute('data-x')), Number(td.getAttribute('data-y')));
+          });
+        },
+        pickSheetAttach(rec, col) {
+          if (!rec || !col || rec.locked) return;
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.addEventListener('change', async () => {
+            const file = input.files && input.files[0];
+            if (!file) return;
+            const meta = await fileToAttachMeta(file);
+            this.commitPayload({ record: rec, column: col, value: meta });
+            this.$nextTick(() => this.refreshSheetValues());
+          });
+          input.click();
+        },
+        onSheetAttachClick(e) {
+          const act = e.target && e.target.closest && e.target.closest('[data-fg-act]');
+          const td = e.target && e.target.closest && e.target.closest('td[data-x][data-y]');
+          if (!td || td.classList.contains('jexcel_row')) return;
+          const x = Number(td.getAttribute('data-x'));
+          const y = Number(td.getAttribute('data-y'));
+          const col = this.visibleColumns[x];
+          const rec = this.filteredRecords[y];
+          if (!col || !rec || effectiveColumn(rec, col).type !== 'attachment') return;
+          e.preventDefault();
+          e.stopPropagation();
+          const meta = isAttachMeta(rawStored(rec, col)) ? rawStored(rec, col) : null;
+          const kind = act ? act.getAttribute('data-fg-act') : (meta ? 'open' : 'pick');
+          if (kind === 'open' && meta) this.openAttachment({ meta, record: rec, popout: false });
+          else if (kind === 'popout' && meta) this.openAttachment({ meta, record: rec, popout: true });
+          else if (kind === 'pick') this.pickSheetAttach(rec, col);
+          else if (kind === 'clear') {
+            this.commitPayload({ record: rec, column: col, value: null });
+            this.$nextTick(() => this.refreshSheetValues());
+          }
         },
         openSheetAttach(rec, col, cell) {
           if (!rec || !col) return;
