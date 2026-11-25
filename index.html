@@ -4026,8 +4026,6 @@
             else if (col.type === 'autonumber') {
               col.seq = (col.seq || 0) + 1;
               rec.data[col.id] = (col.prefix || '') + String(col.seq).padStart(col.pad || 4, '0');
-            } else if (col.type === 'date' && col.name.toLowerCase().includes('date')) {
-              rec.data[col.id] = new Date().toISOString().slice(0, 10);
             }
           });
           return rec;
