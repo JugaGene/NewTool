@@ -3446,12 +3446,6 @@
         const skuAnchor = skuLikeSample(sample) || (m0.choices || []).some((c) => skuLikeSample(c.sample));
         let hits = items.filter((it) => Math.abs((it.nx + it.nw / 2) - cx0) < 0.08 && String(it.str).trim());
         if (skuAnchor) hits = hits.filter((it) => skuLikeSample(it.str));
-        (m0.choices || []).forEach((c) => {
-          const y = (c.ny || 0) + (c.nh || 0) / 2;
-          if (!hits.some((it) => Math.abs((it.ny + it.nh / 2) - y) < 0.01 && skuLikeSample(it.str))) {
-            hits = hits.concat([{ str: c.sample, nx: c.nx, ny: c.ny, nw: c.nw || 0.02, nh: c.nh || 0.02 }]);
-          }
-        });
         const clusters = [];
         hits.map((it) => it.ny + it.nh / 2).sort((a, b) => a - b).forEach((y) => {
           const last = clusters[clusters.length - 1];
@@ -8440,6 +8434,20 @@
             { id: 'tbl_lines', name: 'Line Items', columns: [{ id: 'col_l_itemno', name: 'Item No' }] }
           ] }, { headerTableId: 'tbl_oh', lineTableId: '' }, { role: 'line', columnId: 'col_pack' }, null);
           if (!mapCols.some((c) => c.id === 'col_pack')) console.warn('line map must list Order Handling Packed Product when there is no line sheet', mapCols);
+          const taughtExtra = extractFromMaps([{ num: 1, items: [
+            { str: '306810', nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02 },
+            { str: '306806', nx: 0.1, ny: 0.32, nw: 0.08, nh: 0.02 },
+            { str: '306805', nx: 0.1, ny: 0.44, nw: 0.08, nh: 0.02 }
+          ] }], {
+            maps: [{
+              role: 'line', columnId: 'sku', page: 1, nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02, sample: '9880810', transform: 'text',
+              choices: [
+                { sample: '9880810', page: 1, nx: 0.1, ny: 0.08, nw: 0.08, nh: 0.02 },
+                { sample: '306810', page: 1, nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02 }
+              ]
+            }]
+          });
+          if (taughtExtra.lines.length !== 3 || taughtExtra.lines.some((r) => String(r.sku) === '9880810')) console.warn('taught SKU from another PDF must not add an extra line', taughtExtra.lines);
           const lkWs = sampleWorkspace('Lookup');
           const custF = remR.headerFields.find((f) => f.fill === 'lookup');
           if (resolveRecipeFill(lkWs, custF, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('customer lookup failed');
