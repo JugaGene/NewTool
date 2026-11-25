@@ -993,8 +993,11 @@
         </template>
       </div>
 
-      <div v-if="sheetEdit.open" class="fixed z-[85] rounded-lg border border-line bg-ink-850 shadow-panel p-1" :style="sheetEdit.style" @mousedown.stop>
-        <field-input :column="effectiveCol(sheetEdit.rec, sheetEdit.col)" :record="sheetEdit.rec" :table="currentTable" :store="store" variant="grid" @commit="commitSheetEdit" @cancel="sheetEdit.open=false" />
+      <div v-if="sheetEdit.open" class="fixed z-[85] rounded-lg border border-line bg-ink-850 shadow-panel p-2" :style="sheetEdit.style" @mousedown.stop @click.stop>
+        <attach-cell v-if="sheetEdit.col && effectiveCol(sheetEdit.rec, sheetEdit.col).type==='attachment'"
+          :column="effectiveCol(sheetEdit.rec, sheetEdit.col)" :record="sheetEdit.rec" variant="form" :locked="!!sheetEdit.rec.locked"
+          @commit="commitSheetEdit" @open="openAttachment" />
+        <field-input v-else :column="effectiveCol(sheetEdit.rec, sheetEdit.col)" :record="sheetEdit.rec" :table="currentTable" :store="store" variant="grid" @commit="commitSheetEdit" @cancel="sheetEdit.open=false" />
       </div>
       <div v-if="fillMenu.open" class="ctx-menu" :style="{ left: fillMenu.x + 'px', top: fillMenu.y + 'px', minWidth: '160px' }" @mousedown.stop @click.stop>
         <button type="button" @click="chooseFill('copy')"><span>Copy cells</span></button>
@@ -3112,7 +3115,7 @@
           return this.filteredRecords.map((rec) => cols.map((col) => {
             const use = effectiveColumn(rec, col);
             if (use.type === 'checkbox') return !!rawStored(rec, col);
-            if (use.type === 'attachment') return this.displayValue(rec, col) || '';
+            if (use.type === 'attachment') return this.displayValue(rec, col) || 'Attach file…';
             return this.displayValue(rec, col);
           }));
         },
@@ -3189,6 +3192,13 @@
             parseFormulas: false,
             copyCompatibility: true,
             wordWrap: false,
+            updateTable(instance, cell, col, row, val, label, cellName) {
+              const c = vm.visibleColumns[Number(col)];
+              if (c && c.type === 'attachment') {
+                cell.style.cursor = 'pointer';
+                cell.title = 'Click to open or attach a file';
+              }
+            },
             contextMenu(obj, x, y, e) {
               if (e) e.preventDefault();
               const rec = y != null ? vm.filteredRecords[y] : null;
@@ -3222,7 +3232,8 @@
               if (rec.locked || (vm.isComputedCell(rec, col) && !formulaUsesTypedValue(use))) return false;
               if (use.type === 'search' || isLinkCol(use) || use.type === 'attachment' || use.type === 'longtext') {
                 const r = cell.getBoundingClientRect();
-                vm.sheetEdit = {
+                if (use.type === 'attachment') vm.openSheetAttach(rec, use, cell);
+                else vm.sheetEdit = {
                   open: true,
                   rec,
                   col: use,
@@ -3260,6 +3271,7 @@
                 row.forEach((val, j) => {
                   const col = cols[j];
                   if (!col || rec.locked) return;
+                  if (col.type === 'attachment') return;
                   if (vm.isComputedCell(rec, col) && !formulaUsesTypedValue(col)) return;
                   const shown = String(vm.displayValue(rec, col) ?? '');
                   const next = col.type === 'checkbox' ? val : String(val == null ? '' : val);
@@ -3305,11 +3317,41 @@
                 if (col && vm.mode === 'architect') vm.openColumnEditor(col);
               });
             });
+            if (!el._fgAttachBound) {
+              el._fgAttachBound = true;
+              el.addEventListener('click', (e) => {
+                const td = e.target && e.target.closest && e.target.closest('td[data-x][data-y]');
+                if (!td || td.classList.contains('jexcel_row')) return;
+                const x = Number(td.getAttribute('data-x'));
+                const y = Number(td.getAttribute('data-y'));
+                const col = vm.visibleColumns[x];
+                const rec = vm.filteredRecords[y];
+                if (!col || !rec) return;
+                if (effectiveColumn(rec, col).type !== 'attachment') return;
+                e.preventDefault();
+                vm.openSheetAttach(rec, col, td);
+              });
+            }
           });
+        },
+        openSheetAttach(rec, col, cell) {
+          if (!rec || !col) return;
+          const r = cell && cell.getBoundingClientRect ? cell.getBoundingClientRect() : { left: 80, bottom: 80, width: 260 };
+          this._holdSheetEdit = true;
+          this.sheetEdit = {
+            open: true,
+            rec,
+            col,
+            style: {
+              left: Math.min(r.left, window.innerWidth - 340) + 'px',
+              top: (r.bottom + 4) + 'px',
+              width: Math.max(280, r.width) + 'px'
+            }
+          };
+          setTimeout(() => { this._holdSheetEdit = false; }, 120);
         },
         commitSheetEdit(payload) {
           this.commitPayload(payload);
-          this.sheetEdit.open = false;
           this.$nextTick(() => this.refreshSheetValues());
         },
         recordNumber(rec) {
@@ -5692,10 +5734,11 @@
           });
         },
         onDocClick() {
-          if (this._holdFillMenu) return;
+          if (this._holdFillMenu || this._holdSheetEdit) return;
           this.moreOpen = false;
           this.closeCtxMenu();
           this.fillMenu.open = false;
+          this.sheetEdit.open = false;
         },
         onWinResize() { this.windowWidth = window.innerWidth; }
       },
