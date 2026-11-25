@@ -995,7 +995,7 @@
             </div>
             <div>
               <div class="text-sm font-medium mb-1">Clicked on the PDF</div>
-              <p class="text-[12px] text-mute mb-2">After a click, choose what to do with that value: keep the PDF text, look it up and <strong class="text-mist">link</strong> a row, copy another field from that row, or type a fixed value.</p>
+              <p class="text-[12px] text-mute mb-2">After a click, choose what to do with that value: keep the PDF text, look it up and <strong class="text-mist">link</strong> a row, copy another field from that row, or type a fixed value. Maps marked <strong class="text-mist">each line</strong> are read once on the first product row, then again on every later product row — so 360, 1.344 and 720 become three different Qty cells, not one copied value.</p>
               <p v-if="!(recipeDraft.maps && recipeDraft.maps.length)" class="text-[12px] text-mute mb-2">Nothing clicked yet. Open a PDF with Docs, then Teach on PDF.</p>
               <div v-for="(m, i) in (recipeDraft.maps || [])" :key="m.id" class="rounded-lg border border-line p-2 mb-2 space-y-2 text-sm">
                 <div class="flex flex-wrap items-center gap-2">
@@ -3117,9 +3117,10 @@
       const lineMaps = maps.filter((m) => m.role === 'line');
       const lines = [];
       if (lineMaps.length) {
-        const page = pages[(lineMaps[0].page || 1) - 1];
+        const skuMap = lineMaps.find((m) => /^\d{4,}$/.test(String(m.sample || '').replace(/[\s.]/g, '')));
+        const m0 = skuMap || lineMaps[0];
+        const page = pages[(m0.page || 1) - 1];
         const items = (page && page.items) || [];
-        const m0 = lineMaps[0];
         const cx0 = m0.nx + m0.nw / 2;
         const sample = String(m0.sample || '').trim();
         const skuAnchor = /^\d{4,}$/.test(sample.replace(/[\s.]/g, ''));
@@ -4251,6 +4252,12 @@
           return !this.undocked.recipes;
         },
         teachHintText() {
+          if (this.recipeTeach.line) {
+            if (this.recipeTeach.colId) {
+              return 'Click that value on the first product line only (not the Europool row). Qty and price on later products are read from the same columns.';
+            }
+            return 'Keep Repeats on. Map Item No, then Qty, then Price — always on the first product line. Each PDF product row becomes its own Line Items row with that row’s quantity.';
+          }
           if (this.recipeTeach.colId) {
             return this.undocked.docs || this.panelMode === 'docs'
               ? 'Now click that value on the PDF window.'
@@ -7218,8 +7225,13 @@
           if (!this.recipeDraft.detect) this.recipeDraft.detect = sample;
           this.saveRecipe();
           this.recipeTeach.colId = '';
-          this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
-          this.toast('Mapped ' + sample + ' → column.');
+          if (map.role === 'line') {
+            this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + ' on every product line. Next: pick Qty or Price, still with Repeats on, and click it on the same first product line.';
+            this.toast('Each product row will get its own ' + this.recipeMapColumnName(map) + ' (this line was ' + sample + ').');
+          } else {
+            this.recipeHint = 'Mapped ' + this.recipeMapColumnName(map) + ' ← ' + sample + '. In Recipes you can turn that click into a lookup/link, copy another field, or type a fixed value.';
+            this.toast('Mapped ' + sample + ' → column.');
+          }
         },
         async parsePdfPages(doc) {
           if (!doc || !window.pdfjsLib) return [];
@@ -7362,9 +7374,16 @@
           try {
             if (!doc.text) doc.text = await this.readDocText(doc);
             const extracted = runRecipeExtract(doc.text, this.recipeDraft);
-            const lines = extracted.lines.map((row, i) => 'Line ' + (i + 1) + ': ' + JSON.stringify(row)).join('\n');
+            let click = { header: {}, lines: [] };
+            if ((this.recipeDraft.maps || []).length && doc.kind === 'pdf') {
+              const pages = await this.parsePdfPages(doc);
+              click = extractFromMaps(pages, this.recipeDraft);
+            }
+            const lineRows = click.lines.length ? click.lines : extracted.lines;
+            const lines = lineRows.map((row, i) => 'Line ' + (i + 1) + ': ' + JSON.stringify(row)).join('\n');
             const heads = Object.values(extracted.header).map((h) => (h.label || 'field') + ': ' + (h.value === '' ? '(empty)' : h.value)).join('\n');
-            this.recipePreview = (doc.text || '(no text)') + '\n\n— mapped —\n' + heads + (lines ? '\n' + lines : '\n(no line items)');
+            const clickHeads = Object.keys(click.header).map((k) => k + ': ' + click.header[k]).join('\n');
+            this.recipePreview = (doc.text || '(no text)') + '\n\n— mapped —\n' + heads + (clickHeads ? '\n' + clickHeads : '') + (lines ? '\n' + lines : '\n(no line items)');
           } catch (e) {
             this.recipePreview = 'Could not read this file.';
           }
@@ -7848,10 +7867,14 @@
             { str: '306806', nx: 0.1, ny: 0.32, nw: 0.08, nh: 0.02 },
             { str: '1344', nx: 0.4, ny: 0.32, nw: 0.05, nh: 0.02 }
           ] }], {
-            maps: [{ role: 'line', columnId: 'sku', page: 1, nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02, sample: '306810', transform: 'text' }],
+            maps: [
+              { role: 'line', columnId: 'sku', page: 1, nx: 0.1, ny: 0.20, nw: 0.08, nh: 0.02, sample: '306810', transform: 'text' },
+              { role: 'line', columnId: 'qty', page: 1, nx: 0.4, ny: 0.20, nw: 0.05, nh: 0.02, sample: '360', transform: 'number' }
+            ],
             lineSkip: { enabled: true, rules: [{ op: 'endsWith', value: '15' }] }
           });
           if (clickLines.lines.length !== 2 || clickLines.lines.some((r) => String(r.sku).slice(-2) === '15')) console.warn('click map crate skip failed', clickLines.lines);
+          if (Number(clickLines.lines[0].qty) !== 360 || Number(clickLines.lines[1].qty) !== 1344) console.warn('each product row should keep its own qty', clickLines.lines);
           const lkWs = sampleWorkspace('Lookup');
           const custF = remR.headerFields.find((f) => f.fill === 'lookup');
           if (resolveRecipeFill(lkWs, custF, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('customer lookup failed');
