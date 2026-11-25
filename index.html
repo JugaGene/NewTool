@@ -268,9 +268,9 @@
       <div v-if="recipeTeach.active" class="shrink-0 bg-gold text-ink-900 px-3 py-2 text-[13px] flex flex-wrap items-center gap-2 relative z-30">
         <span class="font-semibold">Teaching {{ (recipeDraft && recipeDraft.name) || 'recipe' }}</span>
         <label class="inline-flex items-center gap-1 text-[12px]">Column
-          <select v-model="recipeTeach.colId" class="rounded-md bg-ink-900 text-mist px-2 py-1" @change="onTeachColChange">
+          <select v-model="recipeTeach.pick" class="rounded-md bg-ink-900 text-mist px-2 py-1" @change="onTeachColChange">
             <option value="">Pick a column…</option>
-            <option v-for="c in teachColumns" :key="(c.teachRole || '') + c.id" :value="c.id">{{ c.teachLabel || c.name }}</option>
+            <option v-for="c in teachColumns" :key="(c.teachRole || 'header') + ':' + c.id" :value="(c.teachRole || 'header') + ':' + c.id">{{ c.teachLabel || c.name }}</option>
           </select>
         </label>
         <label class="inline-flex items-center gap-1 text-[12px]">
@@ -2884,6 +2884,22 @@
       return /^\d{4,}$/.test(String(s == null ? '' : s).replace(/[\s.]/g, ''));
     }
 
+    function ensureRecipeLineTable(store, recipe) {
+      if (!store || !recipe) return null;
+      let t = findTable(store, recipe.lineTableId);
+      if (t) return t;
+      t = (store.tables || []).find((x) => /line\s*item/i.test(x.name || ''))
+        || (store.tables || []).find((x) => /^lines$/i.test(x.name || ''))
+        || (store.tables || []).find((x) => /line/i.test(x.name || '') && !/deadline|outline/i.test(x.name || ''));
+      if (!t) return null;
+      recipe.lineTableId = t.id;
+      if (!recipe.lineLinkColumnId) {
+        const link = (t.columns || []).find((c) => c.type === 'link' || c.type === 'search');
+        if (link) recipe.lineLinkColumnId = link.id;
+      }
+      return t;
+    }
+
     function uniqueRecipeLines(recipe, lines) {
       const uniq = recipe && recipe.lineUnique;
       if (!uniq || !uniq.enabled || !lines || !lines.length) return lines || [];
@@ -4186,7 +4202,7 @@
           recipeBusy: false,
           recipeHint: '',
           recipePreview: '',
-          recipeTeach: { active: false, colId: '', line: false },
+          recipeTeach: { active: false, colId: '', pick: '', line: false },
           pdfView: { pages: [], src: '', error: '' },
           pdfHover: null
         };
@@ -4554,7 +4570,7 @@
           deep: true,
           handler(v) {
             if (this._remoteTeach) return;
-            this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, line: v.line } });
+            this.undockPost({ type: 'teach', teach: { active: v.active, colId: v.colId, pick: v.pick, line: v.line } });
             if (v && v.active && this.activeDoc && this.activeDoc.kind === 'pdf') this.ensurePdfTeachView(this.activeDoc);
             if (!(v && v.active)) this.pdfHover = null;
           }
@@ -7069,7 +7085,12 @@
           }
           if (msg.type === 'teach' && msg.teach) {
             this._remoteTeach = true;
-            this.recipeTeach = { active: !!msg.teach.active, colId: msg.teach.colId || '', line: !!msg.teach.line };
+            this.recipeTeach = {
+              active: !!msg.teach.active,
+              colId: msg.teach.colId || '',
+              pick: msg.teach.pick || '',
+              line: !!msg.teach.line
+            };
             this.$nextTick(() => { this._remoteTeach = false; });
           }
           if (msg.type === 'pdf-hit') this.applyPdfHit(msg);
@@ -7411,7 +7432,8 @@
             this.currentTableId = ht.id;
             this.currentGroupId = ht.groupId;
           }
-          this.recipeTeach = { active: true, colId: '', line: !!this.recipeDraft.lineTableId };
+          ensureRecipeLineTable(this.store, this.recipeDraft);
+          this.recipeTeach = { active: true, colId: '', pick: '', line: !!ensureRecipeLineTable(this.store, this.recipeDraft) };
           this.selectedRecipeId = this.recipeDraft.id;
           if (this.splitWidth < 46) this.splitWidth = 48;
           if (!this.activeDoc || this.activeDoc.kind !== 'pdf') {
@@ -7424,36 +7446,40 @@
         },
         stopRecipeTeach() {
           this.saveRecipe();
-          this.recipeTeach = { active: false, colId: '', line: false };
+          this.recipeTeach = { active: false, colId: '', pick: '', line: false };
         },
         onTeachColChange() {
-          const col = this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
-          if (!col) return;
-          if (col.teachRole === 'line') {
+          const pick = String(this.recipeTeach.pick || '');
+          if (!pick) {
+            this.recipeTeach.colId = '';
+            return;
+          }
+          const i = pick.indexOf(':');
+          const role = i < 0 ? '' : pick.slice(0, i);
+          const colId = i < 0 ? pick : pick.slice(i + 1);
+          this.recipeTeach.colId = colId;
+          const col = this.teachColumns.find((c) => c.id === colId && (!c.teachRole || c.teachRole === role || !role));
+          if (role === 'line' || (col && col.teachRole === 'line')) {
             this.recipeTeach.line = true;
-            const lt = findTable(this.store, this.recipeDraft.lineTableId);
+            const lt = ensureRecipeLineTable(this.store, this.recipeDraft);
             if (lt) { this.currentTableId = lt.id; this.currentGroupId = lt.groupId; }
-            this.recipeHint = 'Click each unique product number in that PDF column. Extra clicks add lines; they do not overwrite.';
-          } else {
-            this.recipeTeach.line = false;
-            this.recipeHint = 'Click “' + col.name + '” on the PDF (once for the whole order).';
+            this.recipeHint = 'Several products is on. Click each unique product number in that PDF column — extra clicks add, they do not replace.';
+          } else if (col) {
+            this.recipeHint = 'Click “' + col.name + '” on the PDF (once for the whole order). Leave Several products on if you will map SKUs next.';
           }
         },
         onTeachLineToggle() {
-          const keep = this.recipeTeach.colId;
           normalizeLineSkip(this.recipeDraft);
           normalizeLineUnique(this.recipeDraft);
-          if (this.recipeTeach.line) {
-            const lt = findTable(this.store, this.recipeDraft.lineTableId);
-            if (lt) {
-              this.currentTableId = lt.id;
-              this.currentGroupId = lt.groupId;
-            } else {
-              this.toast('Set a line-item sheet on the recipe first.', 'warn');
-              this.recipeTeach.line = false;
-            }
+          if (!this.recipeTeach.line) return;
+          const lt = ensureRecipeLineTable(this.store, this.recipeDraft);
+          if (lt) {
+            this.currentTableId = lt.id;
+            this.currentGroupId = lt.groupId;
+            this.saveRecipe();
+          } else {
+            this.toast('Add a Line Items sheet (or set Line-item sheet on the recipe). Several products stays on so SKU clicks can stack.');
           }
-          if (keep && this.teachColumns.some((c) => c.id === keep)) this.recipeTeach.colId = keep;
         },
         pdfItemStyle(it) {
           return {
@@ -7510,8 +7536,12 @@
           if (lab && sample.toLowerCase().indexOf(lab.toLowerCase()) === 0) {
             sample = sample.slice(lab.length).replace(/^[\s:]+/, '') || sample;
           }
-          const mapCol = this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
-          const lineCol = !!(mapCol && mapCol.teachRole === 'line') || this.recipeTeach.line || (skuLikeSample(sample) && findColumn(findTable(this.store, this.recipeDraft.lineTableId), this.recipeTeach.colId));
+          const pick = String(this.recipeTeach.pick || '');
+          const pickRole = pick.indexOf(':') >= 0 ? pick.slice(0, pick.indexOf(':')) : '';
+          const mapCol = this.teachColumns.find((c) => c.id === this.recipeTeach.colId && (!pickRole || c.teachRole === pickRole))
+            || this.teachColumns.find((c) => c.id === this.recipeTeach.colId);
+          ensureRecipeLineTable(this.store, this.recipeDraft);
+          const lineCol = pickRole === 'line' || !!(mapCol && mapCol.teachRole === 'line') || (this.recipeTeach.line && skuLikeSample(sample)) || (skuLikeSample(sample) && findColumn(findTable(this.store, this.recipeDraft.lineTableId), this.recipeTeach.colId));
           if (lineCol) this.recipeTeach.line = true;
           let transform = guessTransform(sample);
           if (transform === 'number' && mapCol && (isLinkCol(mapCol) || mapCol.type === 'text' || mapCol.type === 'search' || /product|sku|customer/i.test(mapCol.name || ''))) {
@@ -7562,7 +7592,7 @@
           }
           if (!this.recipeDraft.maps) this.recipeDraft.maps = [];
           const existing = this.recipeDraft.maps.find((m) => m.columnId === map.columnId);
-          const stackOnSameColumn = existing && (existing.role === 'line' || map.role === 'line' || skuLikeSample(sample) || skuLikeSample(existing.sample)) && (samePdfColumn(existing, map) || skuLikeSample(sample));
+          const stackOnSameColumn = existing && (existing.role === 'line' || map.role === 'line' || skuLikeSample(sample) || skuLikeSample(existing.sample) || this.recipeTeach.line);
           if (stackOnSameColumn) {
             existing.role = 'line';
             if (!Array.isArray(existing.choices)) existing.choices = existing.sample ? [{ sample: existing.sample, page: existing.page, nx: existing.nx, ny: existing.ny, nw: existing.nw, nh: existing.nh }] : [];
