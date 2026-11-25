@@ -127,6 +127,26 @@
     .forge-sheet .jexcel > thead > tr > td, .forge-sheet .jexcel > tbody > tr > td.jexcel_row {
       background: #152038; color: #8ea0be; border-color: #223250; font-weight: 600;
     }
+    .forge-sheet .jexcel colgroup col:first-child,
+    .forge-sheet .jexcel > tbody > tr > td.jexcel_row,
+    .forge-sheet .jexcel > thead > tr > td.jexcel_selectall {
+      width: 112px !important;
+      min-width: 112px !important;
+      max-width: 112px !important;
+    }
+    .forge-sheet .jexcel > tbody > tr > td.jexcel_row { padding: 0 4px; overflow: visible; }
+    .fg-row-tools, .fg-col-tools { display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; }
+    .fg-col-tools { margin-left: 4px; }
+    .fg-icon-btn { color: #8ea0be; padding: 2px; border: 0; background: transparent; border-radius: 4px; line-height: 0; cursor: pointer; }
+    .fg-icon-btn:hover { color: #d7e0f2; background: rgba(0,0,0,.25); }
+    .fg-icon-btn.is-locked { color: #f5b942; }
+    .fg-icon-btn.has-log { color: #f5b942; }
+    .fg-row-num { font-variant-numeric: tabular-nums; font-size: 11px; min-width: 1.2em; text-align: center; }
+    .forge-sheet .jexcel > tbody > tr.row-locked > td { background: rgba(245, 185, 66, 0.04); }
+    .forge-sheet .jexcel > tbody > tr > td.changed { box-shadow: inset 3px 0 0 #f5b942; }
+    .cell-log .before { color: #fda4af; text-decoration: line-through; font-size: 10px; line-height: 1.2; }
+    .cell-log .after { color: #3ecfbe; }
+    .th-drop { box-shadow: inset 3px 0 0 #f5b942 !important; }
     .forge-sheet.architect .jexcel > thead > tr > td { color: #f5b942; }
     .forge-sheet .jexcel > tbody > tr > td { background: #0b1220; color: #d7e0f2; border-color: #223250; }
     .forge-sheet .jexcel > tbody > tr > td.readonly { color: #8ea0be; }
@@ -1256,6 +1276,26 @@
         <div class="border-t border-line pt-3 space-y-2">
           <button class="block text-sm text-teal" @click="loadSample(true)">Replace with sample workspace</button>
           <button class="block text-sm text-red-300" @click="resetWorkspace">Reset workspace (forget PIN and data)</button>
+        </div>
+      </modal-frame>
+
+      <!-- Column audit -->
+      <modal-frame v-if="colAudit.open" :title="'Column history' + (colAudit.col ? ' · ' + colAudit.col.name : '')" wide @close="colAudit.open=false">
+        <p class="text-xs text-mute mb-3">Changes in this column. Previous value in rose, new value in teal.</p>
+        <div class="max-h-[55vh] overflow-auto space-y-2">
+          <div v-for="a in columnAuditEntries" :key="a.id" class="rounded-lg border border-line px-3 py-2 text-sm">
+            <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-mute">
+              <span class="font-mono">{{ formatTime(a.at) }}</span>
+              <span>{{ a.mode }}</span>
+              <span>{{ a.rowLabel }}</span>
+            </div>
+            <div class="mt-1 flex flex-wrap items-center gap-2">
+              <span class="text-rose-300 line-through">{{ a.before || 'blank' }}</span>
+              <span class="text-mute">→</span>
+              <span class="text-teal">{{ a.after || 'blank' }}</span>
+            </div>
+          </div>
+          <div v-if="!columnAuditEntries.length" class="px-3 py-10 text-center text-mute text-sm">No changes recorded on this column yet.</div>
         </div>
       </modal-frame>
 
@@ -3840,6 +3880,15 @@
     function attachActSvg(inner) {
       return '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
     }
+    function fgMiniIcon(kind) {
+      const paths = {
+        lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+        unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>',
+        clock: '<path d="M12 7v5l3 2m6-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>',
+        grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>'
+      };
+      return attachActSvg(paths[kind] || '');
+    }
     function escapeAttr(s) {
       return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
     }
@@ -4555,6 +4604,7 @@
           tableEditor: { open: false, draft: {} },
           groupEditor: { open: false, draft: {} },
           rowAudit: { open: false, rec: null },
+          colAudit: { open: false, col: null },
           dragColId: null,
           dragOverColId: null,
           colResize: null,
@@ -4597,6 +4647,23 @@
           const col = this.currentTable.columns[0];
           return col ? this.displayValue(rec, col) : rec.id.slice(-6);
         },
+        columnAuditEntries() {
+          const col = this.colAudit.col;
+          const t = this.currentTable;
+          if (!col || !t) return [];
+          const items = [];
+          t.records.forEach((rec) => {
+            (rec.audit || []).forEach((a) => {
+              if (a.colId !== col.id) return;
+              const labelCol = t.columns[0];
+              items.push(Object.assign({}, a, {
+                rowLabel: labelCol ? this.displayValue(rec, labelCol) : rec.id.slice(-6)
+              }));
+            });
+          });
+          items.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+          return items;
+        },
         visibleColumns() { return this.currentTable ? this.currentTable.columns.filter((c) => !c.hidden) : []; },
         selectionIndex() {
           const rows = this.filteredRecords;
@@ -4629,7 +4696,7 @@
         },
         sheetBindKey() {
           if (this.view !== 'grid' || !this.currentTable) return '';
-          const cols = this.visibleColumns.map((c) => c.id + ':' + c.name + ':' + (c.width || 160) + ':' + c.type).join(',');
+          const cols = this.visibleColumns.map((c) => c.id + ':' + c.name + ':' + c.type).slice().sort().join(',');
           const rows = this.filteredRecords.map((r) => r.id).join(',');
           return [this.currentTable.id, this.mode, cols, rows, this.sort.colId, this.sort.dir, this.search, this.showHiddenRows].join('|');
         },
@@ -4706,6 +4773,12 @@
           if (nRows === 1) {
             const rec = rows[0];
             items.push({ id: 'lock', label: rec.locked ? 'Unlock row' : 'Lock row' });
+            items.push({ id: 'history', label: 'Row history' });
+          }
+          if (this.ctxMenu.kind === 'col' && this.ctxMenuCol()) {
+            items.push({ id: 'colhist', label: 'Column history' });
+          } else if (cells.length && nCols === 1) {
+            items.push({ id: 'colhist', label: 'Column history' });
           }
           if (this.mode === 'architect' && nRows) items.push({ id: 'hide', label: 'Hide ' + rowWord });
           items.push({ sep: true });
@@ -5035,6 +5108,7 @@
           if (this._jexcel && this._jexcel.ignoreEvents != null) this._jexcel.ignoreEvents = false;
           this._sheetLock = false;
           this.paintAttachCells();
+          this.paintSheetChrome();
         },
         bindSheet() {
           if (this.panelMode) return;
@@ -5074,6 +5148,7 @@
             wordWrap: false,
             updateTable(instance, cell, col, row, val, label, cellName) {
               vm.paintAttachTd(cell, Number(col), Number(row));
+              vm.paintCellLog(cell, Number(col), Number(row));
             },
             contextMenu(obj, x, y, e) {
               if (e) e.preventDefault();
@@ -5169,11 +5244,12 @@
               vm.$nextTick(() => vm.refreshSheetValues());
             },
             onmovecolumn(el2, from, to) {
+              if (vm._internalColMove) return;
               from = Number(from); to = Number(to);
               const vis = vm.visibleColumns;
               const moved = vis[from];
               const dest = vis[to];
-              if (moved && dest) vm.moveColumnTo(moved.id, dest.id);
+              if (moved && dest) vm.moveColumnTo(moved.id, dest.id, { skipJexcel: true });
             },
             onresizecolumn(el2, cell, width) {
               const col = vm.visibleColumns[Number(cell)];
@@ -5194,7 +5270,7 @@
           this.$nextTick(() => {
             const head = el.querySelectorAll('thead td:not(.jexcel_selectall)');
             head.forEach((td, i) => {
-              td.title = vm.mode === 'architect' ? 'Double-click to edit this column (type, lookup, formula)' : td.title;
+              td.title = vm.mode === 'architect' ? 'Double-click to edit this column (type, lookup, formula). Drag the header to move it.' : 'Drag the header to move this column.';
               td.addEventListener('dblclick', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -5204,7 +5280,9 @@
             });
             if (!el._fgAttachBound) {
               el._fgAttachBound = true;
-              el.addEventListener('click', (e) => vm.onSheetAttachClick(e));
+              el.addEventListener('click', (e) => { vm.onSheetChromeClick(e); vm.onSheetAttachClick(e); });
+              el.addEventListener('mousedown', (e) => { vm.onSheetChromeMouseDown(e); vm.onSheetRightMouseDown(e); }, true);
+              el.addEventListener('contextmenu', (e) => vm.onSheetContextPreserve(e), true);
               el.addEventListener('dragover', (e) => vm.onSheetAttachDragOver(e), true);
               el.addEventListener('dragleave', (e) => vm.onSheetAttachDragLeave(e), true);
               el.addEventListener('drop', (e) => vm.onSheetAttachDrop(e), true);
@@ -5216,7 +5294,171 @@
               }, true);
             }
             vm.paintAttachCells();
+            vm.paintSheetChrome();
+            setTimeout(() => vm.paintSheetChrome(), 0);
           });
+        },
+        paintCellLog(td, x, y) {
+          if (!td) return;
+          const col = this.visibleColumns[x];
+          const rec = this.filteredRecords[y];
+          if (!col || !rec) return;
+          if (rec.locked) td.classList.add('readonly');
+          else td.classList.remove('readonly');
+          const tr = td.parentNode;
+          if (tr) tr.classList.toggle('row-locked', !!rec.locked);
+          const use = effectiveColumn(rec, col);
+          if (use.type === 'attachment' || use.type === 'checkbox' || use.type === 'select') return;
+          const ch = this.cellChange(rec, col);
+          td.classList.toggle('changed', !!ch);
+          if (!ch) return;
+          const shown = this.displayValue(rec, col);
+          td.innerHTML = '<div class="cell-log"><div class="before">' + escapeAttr(ch.before || 'blank') + '</div><div class="after">' + escapeAttr(shown == null || shown === '' ? (ch.after || '') : shown) + '</div></div>';
+        },
+        paintSheetChrome() {
+          const el = this.$refs.sheetHost;
+          if (!el) return;
+          el.querySelectorAll('colgroup col:first-child, thead td.jexcel_selectall, tbody td.jexcel_row').forEach((n) => {
+            n.style.width = '112px';
+            n.style.minWidth = '112px';
+            n.style.maxWidth = '112px';
+          });
+          el.querySelectorAll('tbody td.jexcel_row').forEach((td) => {
+            const tr = td.parentNode;
+            const rawY = td.getAttribute('data-y') || (tr && tr.getAttribute && tr.getAttribute('data-y'));
+            const fromAttr = rawY == null || rawY === '' ? NaN : Number(rawY);
+            const fromPos = tr && tr.parentNode ? Array.prototype.indexOf.call(tr.parentNode.children, tr) : -1;
+            const idx = Number.isFinite(fromAttr) ? fromAttr : fromPos;
+            const rec = this.filteredRecords[idx];
+            if (!rec) return;
+            const locked = !!rec.locked;
+            const hasLog = !!(rec.audit && rec.audit.length);
+            td.innerHTML = '<div class="fg-row-tools">'
+              + '<button type="button" class="fg-icon-btn lock-btn' + (locked ? ' is-locked' : '') + '" data-fg-row="lock" data-y="' + idx + '" title="' + (locked ? 'Unlock this row' : 'Lock this row') + '">' + fgMiniIcon(locked ? 'lock' : 'unlock') + '</button>'
+              + '<span class="fg-row-num">' + (idx + 1) + '</span>'
+              + '<button type="button" class="fg-icon-btn' + (hasLog ? ' has-log' : '') + '" data-fg-row="hist" data-y="' + idx + '" title="Row history">' + fgMiniIcon('clock') + '</button>'
+              + '</div>';
+            if (td.parentNode) td.parentNode.classList.toggle('row-locked', locked);
+          });
+          const heads = el.querySelectorAll('thead td:not(.jexcel_selectall)');
+          heads.forEach((td, i) => {
+            const col = this.visibleColumns[i];
+            if (!col) return;
+            let tools = td.querySelector('.fg-col-tools');
+            if (!tools) {
+              tools = document.createElement('span');
+              tools.className = 'fg-col-tools';
+              td.appendChild(tools);
+            }
+            const hasLog = this.filteredRecords.some((r) => (r.audit || []).some((a) => a.colId === col.id));
+            tools.innerHTML = '<button type="button" class="fg-icon-btn" data-fg-col="grip" data-x="' + i + '" title="Drag to move this column" draggable="true">' + fgMiniIcon('grip') + '</button>'
+              + '<button type="button" class="fg-icon-btn' + (hasLog ? ' has-log' : '') + '" data-fg-col="hist" data-x="' + i + '" title="Column history">' + fgMiniIcon('clock') + '</button>';
+            if (!td._fgColBound) {
+              td._fgColBound = true;
+              td.addEventListener('dragstart', (e) => {
+                const grip = e.target && e.target.closest && e.target.closest('[data-fg-col="grip"]');
+                if (!grip) return;
+                const c = this.visibleColumns[Number(grip.getAttribute('data-x'))];
+                if (c) this.onColDragStart(e, c);
+              });
+              td.addEventListener('dragend', () => this.onColDragEnd());
+              td.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                const x = Number(td.getAttribute('data-x'));
+                const c = this.visibleColumns[Number.isFinite(x) ? x : i];
+                if (c) this.onColDragOver(e, c);
+                td.classList.add('th-drop');
+              });
+              td.addEventListener('dragleave', () => td.classList.remove('th-drop'));
+              td.addEventListener('drop', (e) => {
+                e.preventDefault();
+                td.classList.remove('th-drop');
+                const x = Number(td.getAttribute('data-x'));
+                const c = this.visibleColumns[Number.isFinite(x) ? x : i];
+                if (c) this.onColDrop(e, c);
+              });
+            }
+          });
+        },
+        sheetHitFromEvent(e) {
+          const t = e.target && e.target.closest && e.target.closest('td');
+          if (!t) return null;
+          if (t.classList.contains('jexcel_selectall')) return { kind: 'corner' };
+          if (t.classList.contains('jexcel_row')) {
+            const tr = t.parentNode;
+            const y = tr && tr.getAttribute ? Number(tr.getAttribute('data-y')) : NaN;
+            const rec = this.filteredRecords[y];
+            return rec ? { kind: 'row', rec } : null;
+          }
+          if (t.parentNode && t.parentNode.parentNode && t.parentNode.parentNode.tagName === 'THEAD') {
+            const x = Number(t.getAttribute('data-x'));
+            const col = this.visibleColumns[x];
+            return col ? { kind: 'col', col } : null;
+          }
+          const x = Number(t.getAttribute('data-x'));
+          const y = Number(t.getAttribute('data-y'));
+          const rec = this.filteredRecords[y];
+          const col = this.visibleColumns[x];
+          if (rec && col) return { kind: 'cell', rec, col };
+          return null;
+        },
+        selectionCoversHit(hit) {
+          if (!hit) return false;
+          if (this.selectMode === 'all') return true;
+          if (hit.kind === 'cell') return this.isCellSelected(hit.rec, hit.col);
+          if (hit.kind === 'row') return this.isRowSelected(hit.rec);
+          if (hit.kind === 'col') return this.isColSelected(hit.col);
+          if (hit.kind === 'corner') return this.selectMode === 'all';
+          return false;
+        },
+        onSheetChromeMouseDown(e) {
+          const btn = e.target && e.target.closest && e.target.closest('[data-fg-row], [data-fg-col]');
+          if (!btn) return;
+          e.stopPropagation();
+          if (btn.getAttribute('data-fg-col') === 'grip') return;
+          e.stopImmediatePropagation();
+        },
+        onSheetRightMouseDown(e) {
+          if (e.button !== 2) return;
+          const hit = this.sheetHitFromEvent(e);
+          if (this.selectionCoversHit(hit)) {
+            e.stopImmediatePropagation();
+          }
+        },
+        onSheetContextPreserve(e) {
+          const hit = this.sheetHitFromEvent(e);
+          if (!this.selectionCoversHit(hit)) return;
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          this.openCtxMenu(e, hit.kind, hit.rec, hit.col);
+        },
+        onSheetChromeClick(e) {
+          const rowBtn = e.target && e.target.closest && e.target.closest('[data-fg-row]');
+          if (rowBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            const rec = this.filteredRecords[Number(rowBtn.getAttribute('data-y'))];
+            if (!rec) return;
+            if (rowBtn.getAttribute('data-fg-row') === 'lock') this.toggleRowLock(rec);
+            else if (rowBtn.getAttribute('data-fg-row') === 'hist') this.openRowAudit(rec);
+            return;
+          }
+          const colBtn = e.target && e.target.closest && e.target.closest('[data-fg-col="hist"]');
+          if (colBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            const col = this.visibleColumns[Number(colBtn.getAttribute('data-x'))];
+            if (col) this.openColumnAudit(col);
+          }
+        },
+        ctxMenuCol() {
+          if (this.ctxMenu.kind === 'col') {
+            const cells = this.selectedCellEntries();
+            return (cells[0] && cells[0].col) || this.visibleColumns.find((c) => c.id === this.selectedCell.colId) || null;
+          }
+          const cells = this.selectedCellEntries();
+          if (cells.length && cells.every((x) => x.col.id === cells[0].col.id)) return cells[0].col;
+          return this.visibleColumns.find((c) => c.id === this.selectedCell.colId) || null;
         },
         paintAttachTd(td, x, y) {
           if (!td) return;
@@ -6237,6 +6479,11 @@
           else if (id === 'selcol') this.selectCurrentColumns();
           else if (id === 'selall') this.selectAll();
           else if (id === 'lock' && this.selectedRecords[0]) this.toggleRowLock(this.selectedRecords[0]);
+          else if (id === 'history' && this.selectedRecords[0]) this.openRowAudit(this.selectedRecords[0]);
+          else if (id === 'colhist') {
+            const col = this.ctxMenuCol();
+            if (col) this.openColumnAudit(col);
+          }
           else if (id === 'hide') this.hideSelectedRow();
           else if (id === 'delete') this.deleteSelected();
         },
@@ -6364,8 +6611,11 @@
           this._colMovePress = { colId: col.id, x: e.clientX, y: e.clientY, shift: !!e.shiftKey };
           this.dragColId = col.id;
         },
-        moveColumnTo(fromId, toId) {
+        moveColumnTo(fromId, toId, opts) {
           if (!fromId || !toId || fromId === toId || !this.currentTable) return;
+          const vis = this.visibleColumns;
+          const fromV = vis.findIndex((c) => c.id === fromId);
+          const toV = vis.findIndex((c) => c.id === toId);
           const cols = this.currentTable.columns;
           const from = cols.findIndex((c) => c.id === fromId);
           const to = cols.findIndex((c) => c.id === toId);
@@ -6373,6 +6623,12 @@
           const [moved] = cols.splice(from, 1);
           cols.splice(to, 0, moved);
           this.audit('column.reorder', this.currentTable.name + '.' + moved.name, '');
+          if (!(opts && opts.skipJexcel) && this._jexcel && typeof this._jexcel.moveColumn === 'function' && fromV >= 0 && toV >= 0 && fromV !== toV) {
+            this._internalColMove = true;
+            try { this._jexcel.moveColumn(fromV, toV); } catch (err) { /* ignore */ }
+            this._internalColMove = false;
+          }
+          this.$nextTick(() => this.paintSheetChrome());
         },
         computeFillBox(src, rec, col) {
           const s = this.selectionIndex;
@@ -6887,9 +7143,16 @@
           rec.audit.push({ id: uid('raud'), at: nowIso(), mode: this.mode, action: 'lock', column: 'Lock', colId: '_lock', before: on ? 'unlocked' : 'locked', after: on ? 'locked' : 'unlocked' });
           this.audit(on ? 'record.lock' : 'record.unlock', this.currentTable && this.currentTable.name, rec.id);
           this.toast(on ? 'Row locked.' : 'Row unlocked.');
+          this.$nextTick(() => {
+            this.refreshSheetValues();
+            this.paintSheetChrome();
+          });
         },
         openRowAudit(rec) {
           this.rowAudit = { open: true, rec: rec };
+        },
+        openColumnAudit(col) {
+          this.colAudit = { open: true, col: col };
         },
         startRowHeadResize(e) {
           this.startColResize(e, { id: '_rowhead', width: this.rowHeadWidth, head: true });
@@ -6927,13 +7190,7 @@
           this.dragColId = null;
           this.dragOverColId = null;
           if (!fromId || fromId === col.id || !this.currentTable) return;
-          const cols = this.currentTable.columns;
-          const from = cols.findIndex((c) => c.id === fromId);
-          const to = cols.findIndex((c) => c.id === col.id);
-          if (from < 0 || to < 0) return;
-          const [moved] = cols.splice(from, 1);
-          cols.splice(to, 0, moved);
-          this.audit('column.reorder', this.currentTable.name + '.' + moved.name, '');
+          this.moveColumnTo(fromId, col.id);
         },
         onColDragEnd() { this.dragColId = null; this.dragOverColId = null; },
         applyKeyLookups(table, rec, changedCol) {
