@@ -3622,6 +3622,22 @@
       });
     }
 
+    async function deleteAttachFile(id) {
+      if (!id) return;
+      const prev = attachmentBlobs.get(id);
+      if (prev && prev.url) URL.revokeObjectURL(prev.url);
+      attachmentBlobs.delete(id);
+      try {
+        const db = await openAttachDb();
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction('files', 'readwrite');
+          tx.objectStore('files').delete(id);
+          tx.oncomplete = resolve;
+          tx.onerror = () => reject(tx.error);
+        });
+      } catch (e) { /* gone from memory either way */ }
+    }
+
     async function putAttachFile(id, file) {
       const url = URL.createObjectURL(file);
       const prev = attachmentBlobs.get(id);
@@ -6400,6 +6416,41 @@
         cancelEdit() { this.editing = { recId: null, colId: null }; },
         commitEdit(payload) { this.commitPayload(payload); this.cancelEdit(); },
         onFormCommit(payload) { this.commitPayload(payload); },
+        forgetAttachDoc(meta) {
+          if (!isAttachMeta(meta)) return;
+          (this.docs || []).forEach((d) => {
+            if (d.attachId !== meta.id) return;
+            forgetPdfCache(pdfDocKey(d));
+            if (d.url) URL.revokeObjectURL(d.url);
+          });
+          this.docs = (this.docs || []).filter((d) => d.attachId !== meta.id);
+          if (this.activeDocId && !(this.docs || []).some((d) => d.id === this.activeDocId)) {
+            this.activeDocId = this.docs[0] && this.docs[0].id;
+          }
+          deleteAttachFile(meta.id);
+        },
+        discardPreviousOrderFill(table, rec, oldMeta) {
+          if (!table || !rec) return;
+          const packed = packedProductColumn(table);
+          siblingOrderRecords(table, rec).forEach((r) => {
+            table.records = table.records.filter((x) => x.id !== r.id);
+          });
+          if (oldMeta && oldMeta.id) {
+            const attCol = (table.columns || []).find((c) => c.type === 'attachment');
+            (table.records || []).slice().forEach((r) => {
+              if (!r || r.id === rec.id || !attCol) return;
+              const a = rawStored(r, attCol);
+              if (isAttachMeta(a) && a.id === oldMeta.id) {
+                table.records = table.records.filter((x) => x.id !== r.id);
+              }
+            });
+          }
+          (table.columns || []).forEach((c) => {
+            if (c.type === 'autonumber' || c.type === 'formula' || c.type === 'rollup' || c.type === 'lookup' || c.type === 'attachment') return;
+            if (packed && c.id === packed.id) this.setCell(rec, c, '', true, table);
+            else if (/customer|kunde|address|ref|packed|delivery|packing/i.test(c.name || '')) this.setCell(rec, c, '', true, table);
+          });
+        },
         commitPayload(payload) {
           if (!payload) return;
           const v = payload.value;
@@ -6409,9 +6460,20 @@
             return;
           }
           if (payload.record && payload.record.fx) delete payload.record.fx[payload.column.id];
-          this.setCell(payload.record, payload.column, v);
-          if (payload.column && payload.column.type === 'attachment' && isAttachMeta(v) && payload.record) {
-            this.$nextTick(() => this.fillRowFromAttach(payload.record, payload.column));
+          const col = payload.column;
+          const rec = payload.record;
+          const table = this.currentTable;
+          if (col && col.type === 'attachment' && rec) {
+            const old = isAttachMeta(rawStored(rec, col)) ? rawStored(rec, col) : null;
+            const replacing = old && (!isAttachMeta(v) || v.id !== old.id);
+            if (replacing) {
+              this.discardPreviousOrderFill(table, rec, old);
+              this.forgetAttachDoc(old);
+            }
+          }
+          this.setCell(rec, col, v);
+          if (col && col.type === 'attachment' && isAttachMeta(v) && rec) {
+            this.$nextTick(() => this.fillRowFromAttach(rec, col));
           }
         },
         applyCellRule(rec, col, spec, dR, dC, quiet) {
@@ -6678,6 +6740,13 @@
           if (!(await this.ask('Delete row' + (recs.length > 1 ? 's' : ''), msg, { danger: true, ok: 'Delete' }))) return;
           this.editing = { recId: null, colId: null };
           const ids = new Set(recs.map((r) => r.id));
+          recs.forEach((rec) => {
+            (t.columns || []).forEach((c) => {
+              if (c.type !== 'attachment') return;
+              const meta = isAttachMeta(rawStored(rec, c)) ? rawStored(rec, c) : null;
+              if (meta) this.forgetAttachDoc(meta);
+            });
+          });
           t.records = t.records.filter((r) => !ids.has(r.id));
           this.selectedRecordId = null;
           this.selectedCell = { recId: null, colId: null };
