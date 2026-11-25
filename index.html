@@ -1004,6 +1004,7 @@
               <div v-for="(m, i) in (recipeDraft.maps || [])" :key="m.id" class="rounded-lg border border-line p-2 mb-2 space-y-2 text-sm">
                 <div class="flex flex-wrap items-center gap-2">
                   <select v-model="m.columnId" class="flex-1 min-w-[8rem] rounded-md bg-ink-900 border border-line px-2 py-1" :disabled="mode!=='architect'">
+                    <option value="">This sheet column…</option>
                     <option v-for="c in mapTargetColumns(m)" :key="c.id" :value="c.id">{{ c.name }}</option>
                   </select>
                   <span class="text-mute">←</span>
@@ -2883,6 +2884,35 @@
     function skuLikeSample(s) {
       const t = String(s == null ? '' : s).replace(/[\s\u00a0]/g, '');
       return /^\d{5,8}$/.test(t);
+    }
+
+    function recipeMapTargetColumns(store, recipe, map, currentTable) {
+      const seen = {};
+      const out = [];
+      const addTable = (t) => {
+        if (!t) return;
+        (t.columns || []).forEach((c) => {
+          if (!c || !c.id || seen[c.id]) return;
+          seen[c.id] = true;
+          out.push({ id: c.id, name: t.name + ' · ' + c.name });
+        });
+      };
+      const ht = findTable(store, recipe && recipe.headerTableId) || currentTable || null;
+      const lt = findTable(store, recipe && recipe.lineTableId);
+      if (map && map.role === 'line') {
+        addTable(lt);
+        addTable(ht);
+      } else {
+        addTable(ht);
+        addTable(lt);
+      }
+      if (map && map.columnId && !seen[map.columnId]) {
+        (store.tables || []).forEach((t) => {
+          const c = findColumn(t, map.columnId);
+          if (c) addTable(t);
+        });
+      }
+      return out;
     }
 
     function ensureRecipeLineTable(store, recipe) {
@@ -7433,7 +7463,7 @@
           });
         },
         mapTargetColumns(m) {
-          return (m && m.role === 'line') ? this.recipeLineColumns : this.recipeHeaderColumns;
+          return recipeMapTargetColumns(this.store, this.recipeDraft, m, this.currentTable);
         },
         recipeMapColumnName(m) {
           const tables = this.store.tables || [];
@@ -8405,6 +8435,11 @@
           });
           if (clickLines.lines.length !== 3 || clickLines.lines.some((r) => String(r.sku).slice(-2) === '15')) console.warn('click map should keep 3 products, skip crate and 1.344 qty', clickLines.lines);
           if (clickLines.lines.map((r) => String(r.sku)).join(',') !== '306810,306806,306805') console.warn('product sku order failed', clickLines.lines);
+          const mapCols = recipeMapTargetColumns({ tables: [
+            { id: 'tbl_oh', name: 'Order Handling', columns: [{ id: 'col_pack', name: 'Packed Product' }] },
+            { id: 'tbl_lines', name: 'Line Items', columns: [{ id: 'col_l_itemno', name: 'Item No' }] }
+          ] }, { headerTableId: 'tbl_oh', lineTableId: '' }, { role: 'line', columnId: 'col_pack' }, null);
+          if (!mapCols.some((c) => c.id === 'col_pack')) console.warn('line map must list Order Handling Packed Product when there is no line sheet', mapCols);
           const lkWs = sampleWorkspace('Lookup');
           const custF = remR.headerFields.find((f) => f.fill === 'lookup');
           if (resolveRecipeFill(lkWs, custF, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('customer lookup failed');
