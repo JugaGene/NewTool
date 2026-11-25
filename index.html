@@ -1013,10 +1013,11 @@
                   </label>
                   <label class="text-[11px] text-mute">Match this PDF value to
                     <select v-model="m.lookup.matchColumnId" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
-                      <option value="">—</option>
+                      <option value="">any column (SKU, name…)</option>
                       <option v-for="c in lookupColumns(m.lookup.tableId)" :key="c.id" :value="c.id">{{ c.name }}</option>
                     </select>
                   </label>
+                  <p v-if="lookupMatchHint(m)" class="sm:col-span-2 text-[11px] text-gold">{{ lookupMatchHint(m) }}</p>
                   <label class="text-[11px] text-mute">How to match
                     <select v-model="m.lookup.match" class="mt-0.5 w-full rounded-md bg-ink-900 border border-line px-1 py-1" :disabled="mode!=='architect'">
                       <option value="contains">contains (REMA ≈ REMA Grønt)</option>
@@ -2668,19 +2669,32 @@
       return col ? formatDisplay(store, table, rec, col) : '';
     }
 
+    function skuLikeColumns(table) {
+      return ((table && table.columns) || []).filter((c) => /sku|item\s*no|item\s*#|varenr|ean|barcode/i.test(c.name || ''));
+    }
+
+    function rowMatchesLookupCol(store, table, rec, col, needle, mode) {
+      if (!col) return false;
+      const shown = formatDisplay(store, table, rec, col);
+      const stored = rawStored(rec, col);
+      return recipeTextMatch(needle, shown, mode) || recipeTextMatch(needle, stored, mode) || valuesEqualNeedle(needle, shown, stored);
+    }
+
     function findRecipeLookupRow(store, field, raw) {
       if (!field || (field.fill && field.fill !== 'lookup') || !field.lookup || !field.lookup.tableId) return null;
       const table = findTable(store, field.lookup.tableId);
       if (!table) return null;
       const needle = String(raw == null ? '' : raw).trim();
-      const matchCol = findColumn(table, field.lookup.matchColumnId);
+      if (!needle) return null;
       const mode = field.lookup.match || 'contains';
+      const matchCol = findColumn(table, field.lookup.matchColumnId);
+      const nameLike = matchCol && /name|navn|title|product/i.test(matchCol.name || '') && !/sku|item/i.test(matchCol.name || '');
+      if (/^\d{3,}$/.test(needle) && (nameLike || !matchCol)) {
+        const skuHit = table.records.find((r) => skuLikeColumns(table).some((c) => rowMatchesLookupCol(store, table, r, c, needle, 'equals')));
+        if (skuHit) return skuHit;
+      }
       if (matchCol) {
-        const hit = table.records.find((r) => {
-          const shown = formatDisplay(store, table, r, matchCol);
-          const stored = rawStored(r, matchCol);
-          return recipeTextMatch(needle, shown, mode) || recipeTextMatch(needle, stored, mode) || valuesEqualNeedle(needle, shown, stored);
-        });
+        const hit = table.records.find((r) => rowMatchesLookupCol(store, table, r, matchCol, needle, mode));
         if (hit) return hit;
       }
       return scanTableForNeedle(store, table, needle);
@@ -2738,7 +2752,9 @@
 
     function coerceRecipeCell(store, col, field, raw) {
       let val = resolveRecipeFill(store, field, raw);
-      if (col && isLinkCol(col)) val = matchLinkedRecord(store, col, val);
+      if (col && isLinkCol(col)) {
+        val = matchLinkedRecord(store, col, val) || matchLinkedRecord(store, col, raw) || val;
+      }
       return val;
     }
 
@@ -6762,10 +6778,31 @@
           const t = findTable(this.store, tableId);
           return t ? t.columns : [];
         },
+        lookupMatchHint(m) {
+          if (!m || !m.lookup) return '';
+          const sample = String(m.sample || '').trim();
+          if (!/^\d{3,}$/.test(sample)) return '';
+          const col = findColumn(findTable(this.store, m.lookup.tableId), m.lookup.matchColumnId);
+          if (!col || !/name|navn|title|product/i.test(col.name || '') || /sku|item/i.test(col.name || '')) return '';
+          return '“' + sample + '” is a number. Match SKU / Item No, not “' + col.name + '” (that field is Sugar Snaps, not the SKU).';
+        },
         ensureRecipeLookup(f) {
           if (!f.lookup) f.lookup = emptyRecipeLookup();
           if (!f.lookup.also) f.lookup.also = [];
           if (!f.fill) f.fill = 'pdf';
+          const col = this.currentTable && findColumn(this.currentTable, f.columnId);
+          if (!f.lookup.tableId) {
+            const hint = tableForColumnHint(this.store, col);
+            if (hint) f.lookup.tableId = hint.id;
+          }
+          const table = findTable(this.store, f.lookup.tableId);
+          if (table && !f.lookup.matchColumnId) {
+            const sample = String(f.sample || '').trim();
+            const sku = skuLikeColumns(table)[0];
+            const name = (table.columns || []).find((c) => /name|navn/i.test(c.name || ''));
+            f.lookup.matchColumnId = (/^\d{3,}$/.test(sample) && sku ? sku.id : '') || (name && name.id) || '';
+            if (/^\d{3,}$/.test(sample)) f.lookup.match = 'equals';
+          }
         },
         addMapAlso(m) {
           this.ensureRecipeLookup(m);
@@ -6924,7 +6961,11 @@
               const val = coerceRecipeCell(this.store, col, map || { fill: 'pdf' }, raw);
               if (col && val !== '' && val != null) this.setCell(rec, col, val, true, headerTable);
               else if (col && raw !== '' && raw != null && (isLinkCol(col) || /product|customer|sku/i.test(col.name || ''))) {
-                this.toast(col.name + ': no match for “' + raw + '”. Add that SKU/name on Products/Customers, or set lookup on the click.', 'warn');
+                const mapHint = map && map.lookup && findColumn(findTable(this.store, map.lookup.tableId), map.lookup.matchColumnId);
+                const skuNote = mapHint && /^\d{3,}$/.test(String(raw).trim()) && /name|navn|title/i.test(mapHint.name || '')
+                  ? ' “' + raw + '” is a SKU — set Match this PDF value to SKU / Item No, not ' + mapHint.name + '.'
+                  : ' Add that SKU/name on Products/Customers, or match SKU instead of the product name.';
+                this.toast(col.name + ': no match for “' + raw + '”.' + skuNote, 'warn');
               }
               if (map) this.applyRecipeLookupAlso(headerTable, rec, map, raw);
             });
@@ -7245,6 +7286,11 @@
           if (resolveRecipeFill(lkWs, custF, 'REMA Distribution Danmark') !== 'rec_cust_rema') console.warn('customer lookup failed');
           const prodF = remR.lineFields.find((f) => f.columnId === 'col_l_prod');
           if (resolveRecipeFill(lkWs, prodF, '306832') !== 'rec_prod_snaps') console.warn('product sku lookup failed');
+          const productsT = lkWs.tables.find((x) => x.name === 'Products');
+          const prodNameCol = productsT.columns.find((c) => c.name === 'Name');
+          const nameAsKey = { fill: 'lookup', lookup: { tableId: productsT.id, matchColumnId: prodNameCol.id, match: 'equals', out: 'link' } };
+          if (resolveRecipeFill(lkWs, nameAsKey, '306832') !== 'rec_prod_snaps') console.warn('SKU should still match when lookup key is Product Name');
+          if (coerceRecipeCell(lkWs, lineProdCol, nameAsKey, '306832') !== 'rec_prod_snaps') console.warn('link Product should resolve SKU even if match column is Name');
           const fixF = remR.headerFields.find((f) => f.fill === 'fixed');
           if (resolveRecipeFill(lkWs, fixF, '') !== 'Draft') console.warn('fixed recipe fill failed');
           const ord = lkWs.tables.find((x) => x.name === 'Orders');
